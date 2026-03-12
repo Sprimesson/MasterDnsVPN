@@ -238,7 +238,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         # Config version markers and startup diagnostics
         # ---------------------------------------------------------
         self.config_version = self.config.get("CONFIG_VERSION", 0.1)
-        self.min_config_version = 1.0
+        self.min_config_version = 2.0
 
         self.logger.warning("=" * 60)
         self.logger.warning(

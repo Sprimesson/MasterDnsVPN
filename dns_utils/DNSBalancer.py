@@ -89,6 +89,13 @@ class DNSBalancer:
     def report_send(self, server_key: str):
         self.server_stats[server_key]["sent"] += 1
 
+    def reset_server_stats(self, server_key: str):
+        """Reset historical quality stats for a resolver key."""
+        try:
+            self.server_stats.pop(server_key, None)
+        except Exception:
+            pass
+
     def get_loss_rate(self, server_key: str) -> float:
         stats = self.server_stats.get(server_key)
         if not stats:

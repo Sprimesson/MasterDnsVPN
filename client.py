@@ -12,9 +12,17 @@ import signal
 import socket
 import sys
 import time
+from collections import defaultdict, deque
 from typing import Optional, Tuple
 
 from dns_utils import ARQ, DNSBalancer, DnsPacketParser, PingManager, PrependReader
+from dns_utils.compression import (
+    Compression_Type,
+    compress_payload,
+    get_compression_name,
+    normalize_compression_type,
+    try_decompress_payload,
+)
 from dns_utils.config_loader import get_config_path, load_config
 from dns_utils.DNS_ENUMS import DNS_Record_Type, Packet_Type
 from dns_utils.PacketQueueMixin import PacketQueueMixin
@@ -23,14 +31,6 @@ from dns_utils.utils import (
     async_sendto,
     generate_random_hex_text,
     getLogger,
-)
-
-from dns_utils.compression import (
-    Compression_Type,
-    normalize_compression_type,
-    get_compression_name,
-    compress_payload,
-    try_decompress_payload,
 )
 
 # Ensure UTF-8 output for consistent logging
@@ -127,6 +127,37 @@ class MasterDnsVPNClient(PacketQueueMixin):
                 "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}",
             )
         )
+        self.mtu_using_separator_text: str = str(
+            self.config.get("MTU_USING_SECTION_SEPARATOR_TEXT", "")
+        )
+        self.mtu_removed_server_log_format: str = str(
+            self.config.get("MTU_REMOVED_SERVER_LOG_FORMAT", "")
+        )
+        self.mtu_added_server_log_format: str = str(
+            self.config.get("MTU_ADDED_SERVER_LOG_FORMAT", "")
+        )
+        self.auto_disable_timeout_servers: bool = bool(
+            self.config.get("AUTO_DISABLE_TIMEOUT_SERVERS", True)
+        )
+        self.auto_disable_timeout_window_seconds: float = float(
+            self.config.get("AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS", 300.0)
+        )
+        self.auto_disable_min_observations: int = max(
+            1,
+            int(self.config.get("AUTO_DISABLE_TIMEOUT_MIN_OBSERVATIONS", 3)),
+        )
+        self.auto_disable_check_interval_seconds: float = max(
+            0.5, float(self.config.get("AUTO_DISABLE_CHECK_INTERVAL_SECONDS", 1.0))
+        )
+        self.recheck_inactive_servers_enabled: bool = bool(
+            self.config.get("RECHECK_INACTIVE_SERVERS_ENABLED", True)
+        )
+        self.recheck_inactive_interval_seconds: float = max(
+            60.0, float(self.config.get("RECHECK_INACTIVE_INTERVAL_SECONDS", 1800.0))
+        )
+        self.recheck_server_interval_seconds: float = max(
+            3.0, float(self.config.get("RECHECK_SERVER_INTERVAL_SECONDS", 3.0))
+        )
         self.max_packets_per_batch: int = int(
             self.config.get("MAX_PACKETS_PER_BATCH", 100)
         )
@@ -187,6 +218,18 @@ class MasterDnsVPNClient(PacketQueueMixin):
         self.count_ping = 0
 
         self.server_rtt_tracker = {}
+        self.server_health = defaultdict(
+            lambda: {
+                "pending": deque(),
+                "events": deque(),
+            }
+        )
+        self.runtime_disabled_servers = {}
+        self.mtu_success_output_path: str = ""
+        self.mtu_usage_separator_written: bool = False
+        self.initial_mtu_scan_finished_at: float = 0.0
+        self.next_inactive_recheck_at: float = 0.0
+        self.background_mtu_recheck_mode: bool = False
         self.max_closed_stream_records = int(
             self.config.get("MAX_CLOSED_STREAM_RECORDS", 2000)
         )
@@ -281,11 +324,225 @@ class MasterDnsVPNClient(PacketQueueMixin):
         unique_domains = list(set(d.lower() for d in unique_domains))
         unique_resolvers = list(unique_resolvers)
 
-        self.connections_map = [
-            {"domain": domain, "resolver": resolver}
-            for domain in unique_domains
-            for resolver in unique_resolvers
-        ]
+        self.connections_map = []
+        for domain in unique_domains:
+            for resolver in unique_resolvers:
+                conn = {"domain": domain, "resolver": resolver}
+                conn["_key"] = self._get_connection_key(conn)
+                self.connections_map.append(conn)
+
+    def _get_connection_key(self, connection: dict) -> str:
+        resolver = str(connection.get("resolver", "")).strip()
+        domain = str(connection.get("domain", "")).strip().lower()
+        key = f"{resolver}:{domain}"
+        connection["_key"] = key
+        return key
+
+    def _format_mtu_log_line(
+        self,
+        template: str,
+        connection: Optional[dict] = None,
+        cause: str = "",
+    ) -> str:
+        if not template:
+            return ""
+
+        conn = connection or {}
+        ip_value = str(conn.get("resolver", ""))
+        domain_value = str(conn.get("domain", ""))
+        up_mtu_value = str(conn.get("upload_mtu_bytes", 0))
+        down_mtu_value = str(conn.get("download_mtu_bytes", 0))
+        up_chars_value = str(conn.get("upload_mtu_chars", 0))
+        now_text = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        line = str(template)
+        replacements = {
+            "{IP}": ip_value,
+            "{ip}": ip_value,
+            "{RESOLVER}": ip_value,
+            "{resolver}": ip_value,
+            "{DOMAIN}": domain_value,
+            "{domain}": domain_value,
+            "{UP_MTU}": up_mtu_value,
+            "{up_mtu}": up_mtu_value,
+            "{DOWN_MTU}": down_mtu_value,
+            "{down_mtu}": down_mtu_value,
+            "{DOWN-MTU}": down_mtu_value,
+            "{down-mtu}": down_mtu_value,
+            "{UP_MTU_CHARS}": up_chars_value,
+            "{up_mtu_chars}": up_chars_value,
+            "{CAUSE}": str(cause),
+            "{cause}": str(cause),
+            "{TIME}": now_text,
+            "{time}": now_text,
+        }
+        for token, value in replacements.items():
+            line = line.replace(token, value)
+        return line
+
+    def _append_mtu_log_line(
+        self,
+        template: str,
+        connection: Optional[dict] = None,
+        cause: str = "",
+        output_path: str = "",
+    ) -> None:
+        target_path = output_path or self.mtu_success_output_path
+        if not target_path:
+            return
+
+        line = self._format_mtu_log_line(
+            template=template,
+            connection=connection,
+            cause=cause,
+        ).strip()
+        if not line:
+            return
+
+        try:
+            with open(target_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+                f.flush()
+        except Exception as e:
+            self.logger.warning(
+                f"<yellow>[MTU]</yellow> Failed to append custom runtime line: {e}"
+            )
+
+    def _log_mtu_probe(self, message: str, level: str = "info", is_retry: bool = False):
+        if is_retry or self.background_mtu_recheck_mode:
+            return
+
+        if level == "success":
+            self.logger.success(message)
+        elif level == "debug":
+            self.logger.debug(message)
+        elif level == "warning":
+            self.logger.warning(message)
+        elif level == "error":
+            self.logger.error(message)
+        else:
+            self.logger.info(message)
+
+    def _append_mtu_usage_separator_once(self) -> None:
+        if self.mtu_usage_separator_written:
+            return
+        if not self.mtu_using_separator_text or not self.mtu_success_output_path:
+            return
+        self._append_mtu_log_line(self.mtu_using_separator_text)
+        self.mtu_usage_separator_written = True
+
+    def _refresh_balancer_valid_servers(self) -> None:
+        valid_conns = [c for c in self.connections_map if c.get("is_valid")]
+        self.balancer.set_balancers(valid_conns)
+
+    def _reset_server_runtime_state(self, server_key: str) -> None:
+        self.server_health.pop(server_key, None)
+        self.server_rtt_tracker.pop(server_key, None)
+        self.balancer.reset_server_stats(server_key)
+
+    def _track_server_send(self, server_key: str) -> None:
+        now = time.monotonic()
+        h = self.server_health[server_key]
+        h["pending"].append(now)
+
+    def _track_server_success(self, server_key: str) -> None:
+        now = time.monotonic()
+        h = self.server_health[server_key]
+        if h["pending"]:
+            h["pending"].popleft()
+        h["events"].append((now, True))
+        self._prune_server_health_window(server_key, now)
+
+    def _prune_server_health_window(self, server_key: str, now: float) -> None:
+        h = self.server_health.get(server_key)
+        if not h:
+            return
+        window = max(1.0, self.auto_disable_timeout_window_seconds)
+        events = h["events"]
+        cutoff = now - window
+        while events and events[0][0] < cutoff:
+            events.popleft()
+
+    def _collect_expired_pending_timeouts(self) -> None:
+        now = time.monotonic()
+        timeout_age = max(0.2, self.timeout)
+        for server_key, h in list(self.server_health.items()):
+            pending = h["pending"]
+            events = h["events"]
+            expire_before = now - timeout_age
+            while pending and pending[0] <= expire_before:
+                pending.popleft()
+                events.append((now, False))
+            self._prune_server_health_window(server_key, now)
+            if not pending and not events:
+                self.server_health.pop(server_key, None)
+
+    def _should_disable_for_timeouts(self, server_key: str) -> bool:
+        if not self.auto_disable_timeout_servers:
+            return False
+        if self.balancer.valid_servers_count <= 1:
+            return False
+        h = self.server_health.get(server_key)
+        if not h:
+            return False
+        events = h["events"]
+        if not events:
+            return False
+        if len(events) < max(1, self.auto_disable_min_observations):
+            return False
+        if (events[-1][0] - events[0][0]) < max(
+            1.0, self.auto_disable_timeout_window_seconds
+        ):
+            return False
+        success_count = sum(1 for _, ok in events if ok)
+        return success_count == 0
+
+    def _disable_connection(self, connection: dict, cause: str) -> bool:
+        if not connection:
+            return False
+        if not connection.get("is_valid"):
+            return False
+        if self.balancer.valid_servers_count <= 1:
+            return False
+
+        connection["is_valid"] = False
+        key = self._get_connection_key(connection)
+        self.runtime_disabled_servers[key] = {
+            "disabled_at": time.monotonic(),
+            "cause": str(cause),
+        }
+        self._reset_server_runtime_state(key)
+        self._refresh_balancer_valid_servers()
+
+        resolver = connection.get("resolver", "N/A")
+        self.logger.warning(
+            f"<yellow>DNS server <cyan>{resolver}</cyan> disabled due to: <red>{cause}</red></yellow>"
+        )
+        self._append_mtu_log_line(
+            self.mtu_removed_server_log_format, connection=connection, cause=str(cause)
+        )
+        return True
+
+    def _reactivate_connection(self, connection: dict) -> bool:
+        if not connection:
+            return False
+        if connection.get("is_valid"):
+            return False
+
+        key = self._get_connection_key(connection)
+        self.runtime_disabled_servers.pop(key, None)
+        self._reset_server_runtime_state(key)
+        connection["is_valid"] = True
+        self._refresh_balancer_valid_servers()
+
+        resolver = connection.get("resolver", "N/A")
+        self.logger.info(
+            f"<green>DNS server <cyan>{resolver}</cyan> re-enabled and added back to active list.</green>"
+        )
+        self._append_mtu_log_line(
+            self.mtu_added_server_log_format, connection=connection
+        )
+        return True
 
     # ---------------------------------------------------------
     # Network I/O & Packet Processing
@@ -412,6 +669,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
                     return None, b""
 
                 server_key = f"{source_ip}:{matched_domain}"
+                self._track_server_success(server_key)
                 sent_time = self.server_rtt_tracker.pop(server_key, 0.0)
                 if sent_time > 0.0:
                     self.balancer.report_success(
@@ -556,31 +814,36 @@ class MasterDnsVPNClient(PacketQueueMixin):
         )
 
         if not response:
-            if not is_retry:
-                self.logger.info(
-                    f"<yellow>⚠️ Upload test failed: Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>"
-                )
+            self._log_mtu_probe(
+                f"<yellow>⚠️ Upload test failed: Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>",
+                level="info",
+                is_retry=is_retry,
+            )
             return False
 
         parsed_header, _ = await self._process_received_packet(response)
         packet_type = parsed_header["packet_type"] if parsed_header else None
 
         if packet_type == Packet_Type.MTU_UP_RES:
-            self.logger.success(
-                f"<yellow>🟢 Upload test passed: Upload MTU <green>{mtu_size}</green> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>"
+            self._log_mtu_probe(
+                f"<yellow>🟢 Upload test passed: Upload MTU <green>{mtu_size}</green> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>",
+                level="success",
+                is_retry=is_retry,
             )
             return True
         elif packet_type == Packet_Type.ERROR_DROP:
-            if not is_retry:
-                self.logger.info(
-                    f"<yellow>⚠️ Upload test failed (Server Dropped Packet): Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>"
-                )
+            self._log_mtu_probe(
+                f"<yellow>⚠️ Upload test failed (Server Dropped Packet): Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>",
+                level="info",
+                is_retry=is_retry,
+            )
             return False
 
-        if not is_retry:
-            self.logger.info(
-                f"<yellow>⚠️ Upload test failed: Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>"
-            )
+        self._log_mtu_probe(
+            f"<yellow>⚠️ Upload test failed: Upload MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>",
+            level="info",
+            is_retry=is_retry,
+        )
         return False
 
     async def send_download_mtu_test(
@@ -628,10 +891,11 @@ class MasterDnsVPNClient(PacketQueueMixin):
         )
 
         if not response:
-            if not is_retry:
-                self.logger.info(
-                    f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (No Response)</yellow>"
-                )
+            self._log_mtu_probe(
+                f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (No Response)</yellow>",
+                level="info",
+                is_retry=is_retry,
+            )
             return False
 
         parsed_header, returned_data = await self._process_received_packet(response)
@@ -639,21 +903,25 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
         if packet_type == Packet_Type.MTU_DOWN_RES:
             if returned_data and len(returned_data) == mtu_size:
-                self.logger.success(
-                    f"<yellow>🟢 Download test passed: Download MTU <green>{mtu_size}</green> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>"
+                self._log_mtu_probe(
+                    f"<yellow>🟢 Download test passed: Download MTU <green>{mtu_size}</green> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan></yellow>",
+                    level="success",
+                    is_retry=is_retry,
                 )
                 return True
             else:
-                if not is_retry:
-                    self.logger.info(
-                        f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (Data Size Mismatch)</yellow>"
-                    )
+                self._log_mtu_probe(
+                    f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (Data Size Mismatch)</yellow>",
+                    level="info",
+                    is_retry=is_retry,
+                )
                 return False
 
-        if not is_retry:
-            self.logger.info(
-                f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (Unexpected Packet Type)</yellow>"
-            )
+        self._log_mtu_probe(
+            f"<yellow>⚠️ Download test failed: Download MTU <cyan>{mtu_size}</cyan> bytes via <cyan>{dns_server}</cyan> for <cyan>{domain}</cyan> (Unexpected Packet Type)</yellow>",
+            level="info",
+            is_retry=is_retry,
+        )
         return False
 
     async def test_upload_mtu_size(
@@ -1032,7 +1300,9 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
     def _prepare_mtu_success_output_file(self) -> str:
         output_path = self._resolve_mtu_success_output_path()
+        self.mtu_usage_separator_written = False
         if not output_path:
+            self.mtu_success_output_path = ""
             return ""
 
         try:
@@ -1047,62 +1317,27 @@ class MasterDnsVPNClient(PacketQueueMixin):
             self.logger.info(
                 f"<blue>[MTU]</blue> Success output file initialized: <cyan>{output_path}</cyan>"
             )
+            self.mtu_success_output_path = output_path
             return output_path
         except Exception as e:
             self.logger.warning(
                 f"<yellow>[MTU]</yellow> Failed to initialize output file <cyan>{output_path}</cyan>: {e}"
             )
+            self.mtu_success_output_path = ""
             return ""
-
-    def _format_mtu_success_line(self, connection: dict) -> str:
-        template = (
-            self.mtu_servers_file_format or "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
-        )
-
-        ip_value = str(connection.get("resolver", ""))
-        up_mtu_value = str(connection.get("upload_mtu_bytes", 0))
-        down_mtu_value = str(connection.get("download_mtu_bytes", 0))
-        up_chars_value = str(connection.get("upload_mtu_chars", 0))
-        domain_value = str(connection.get("domain", ""))
-
-        line = str(template)
-        replacements = {
-            "{IP}": ip_value,
-            "{ip}": ip_value,
-            "{RESOLVER}": ip_value,
-            "{resolver}": ip_value,
-            "{UP_MTU}": up_mtu_value,
-            "{up_mtu}": up_mtu_value,
-            "{DOWN_MTU}": down_mtu_value,
-            "{down_mtu}": down_mtu_value,
-            "{DOWN-MTU}": down_mtu_value,
-            "{down-mtu}": down_mtu_value,
-            "{UP_MTU_CHARS}": up_chars_value,
-            "{up_mtu_chars}": up_chars_value,
-            "{DOMAIN}": domain_value,
-            "{domain}": domain_value,
-            "{TIME}": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-            "{time}": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        }
-
-        for token, value in replacements.items():
-            line = line.replace(token, value)
-
-        return line
 
     def _append_mtu_success_line(self, output_path: str, connection: dict) -> None:
         if not output_path:
             return
 
-        try:
-            line = self._format_mtu_success_line(connection).rstrip("\r\n") + "\n"
-            with open(output_path, "a", encoding="utf-8") as f:
-                f.write(line)
-                f.flush()
-        except Exception as e:
-            self.logger.warning(
-                f"<yellow>[MTU]</yellow> Failed to append MTU success line: {e}"
-            )
+        template = (
+            self.mtu_servers_file_format or "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
+        )
+        self._append_mtu_log_line(
+            template=template,
+            connection=connection,
+            output_path=output_path,
+        )
 
     async def test_mtu_sizes(self) -> bool:
 
@@ -1192,7 +1427,131 @@ class MasterDnsVPNClient(PacketQueueMixin):
             )
             return False
 
+        self.initial_mtu_scan_finished_at = time.monotonic()
+        self.next_inactive_recheck_at = (
+            self.initial_mtu_scan_finished_at + self.recheck_inactive_interval_seconds
+        )
+        self._append_mtu_usage_separator_once()
+
         return True
+
+    async def _runtime_timeout_guard_worker(self) -> None:
+        while not self.should_stop.is_set() and not self.session_restart_event.is_set():
+            try:
+                self._collect_expired_pending_timeouts()
+                if (
+                    self.auto_disable_timeout_servers
+                    and self.balancer.valid_servers_count > 1
+                ):
+                    for conn in list(self.balancer.valid_servers):
+                        key = self._get_connection_key(conn)
+                        if self._should_disable_for_timeouts(key):
+                            self._disable_connection(
+                                conn,
+                                cause=f"100% timeout for {int(self.auto_disable_timeout_window_seconds)}s window",
+                            )
+                await self._sleep(max(0.5, self.auto_disable_check_interval_seconds))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.debug(f"Runtime timeout guard worker error: {e}")
+                await self._sleep(1.0)
+
+    async def _recheck_one_inactive_connection(self, connection: dict) -> bool:
+        domain = connection.get("domain")
+        resolver = connection.get("resolver")
+        if not domain or not resolver:
+            return False
+
+        up_valid, up_mtu_bytes, up_mtu_char = await self.test_upload_mtu_size(
+            domain, resolver, 53, self.max_upload_mtu
+        )
+        if (not up_valid) or (
+            self.min_upload_mtu > 0 and up_mtu_bytes < self.min_upload_mtu
+        ):
+            return False
+
+        down_valid, down_mtu_bytes = await self.test_download_mtu_size(
+            domain, resolver, 53, self.max_download_mtu, up_mtu_bytes
+        )
+        if (not down_valid) or (
+            self.min_download_mtu > 0 and down_mtu_bytes < self.min_download_mtu
+        ):
+            return False
+
+        # Keep runtime MTU consistency; avoid adding servers that cannot handle
+        # the currently negotiated session MTU.
+        if (
+            self.synced_upload_mtu > 0
+            and self.synced_download_mtu > 0
+            and (
+                up_mtu_bytes < self.synced_upload_mtu
+                or down_mtu_bytes < self.synced_download_mtu
+            )
+        ):
+            return False
+
+        connection["upload_mtu_bytes"] = up_mtu_bytes
+        connection["upload_mtu_chars"] = up_mtu_char
+        connection["download_mtu_bytes"] = down_mtu_bytes
+        connection["packet_loss"] = 0
+        return self._reactivate_connection(connection)
+
+    async def _recheck_inactive_servers_worker(self) -> None:
+        while not self.should_stop.is_set() and not self.session_restart_event.is_set():
+            try:
+                if not self.recheck_inactive_servers_enabled:
+                    await self._sleep(2.0)
+                    continue
+                if not self.success_mtu_checks or not self.connections_map:
+                    await self._sleep(2.0)
+                    continue
+
+                now = time.monotonic()
+                if self.next_inactive_recheck_at <= 0.0:
+                    base = self.initial_mtu_scan_finished_at or now
+                    self.next_inactive_recheck_at = (
+                        base + self.recheck_inactive_interval_seconds
+                    )
+
+                wait_time = self.next_inactive_recheck_at - now
+                if wait_time > 0:
+                    await self._sleep(min(wait_time, 5.0))
+                    continue
+
+                inactive_conns = [
+                    c for c in self.connections_map if not c.get("is_valid", False)
+                ]
+                if not inactive_conns:
+                    self.next_inactive_recheck_at = (
+                        time.monotonic() + self.recheck_inactive_interval_seconds
+                    )
+                    continue
+
+                self.background_mtu_recheck_mode = True
+                try:
+                    for idx, conn in enumerate(inactive_conns):
+                        if (
+                            self.should_stop.is_set()
+                            or self.session_restart_event.is_set()
+                        ):
+                            break
+
+                        await self._recheck_one_inactive_connection(conn)
+
+                        if idx < len(inactive_conns) - 1:
+                            await self._sleep(self.recheck_server_interval_seconds)
+                finally:
+                    self.background_mtu_recheck_mode = False
+                    self.next_inactive_recheck_at = (
+                        time.monotonic() + self.recheck_inactive_interval_seconds
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.background_mtu_recheck_mode = False
+                self.logger.debug(f"Inactive server recheck worker error: {e}")
+                await self._sleep(2.0)
 
     async def _sync_mtu_with_server(self, max_attempts=10) -> bool:
         """Send the synced MTU values to the server for this session."""
@@ -1504,6 +1863,8 @@ class MasterDnsVPNClient(PacketQueueMixin):
         self.track_types = set()
         self.track_data = set()
         self.rx_tasks = set()
+        self.server_rtt_tracker.clear()
+        self.server_health.clear()
 
         ping_mgr = getattr(self, "ping_manager", None)
         if ping_mgr:
@@ -1527,6 +1888,8 @@ class MasterDnsVPNClient(PacketQueueMixin):
             self.active_streams.clear()
             self.closed_streams.clear()
             self.rx_tasks.clear()
+            self.server_rtt_tracker.clear()
+            self.server_health.clear()
         except Exception:
             pass
 
@@ -1624,6 +1987,12 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
             self.workers.append(self.loop.create_task(self._retransmit_worker()))
             self.workers.append(self.loop.create_task(self.ping_manager.ping_loop()))
+            self.workers.append(
+                self.loop.create_task(self._runtime_timeout_guard_worker())
+            )
+            self.workers.append(
+                self.loop.create_task(self._recheck_inactive_servers_worker())
+            )
 
             stop_task = asyncio.create_task(self.should_stop.wait())
             restart_task = asyncio.create_task(self.session_restart_event.wait())
@@ -2306,6 +2675,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
             for conn in target_conns:
                 self.server_rtt_tracker[conn["_key"]] = time.monotonic()
                 self.balancer.report_send(conn["_key"])
+                self._track_server_send(conn["_key"])
                 query_packets = self.dns_parser.build_request_dns_query(
                     domain=conn["domain"],
                     session_id=self.session_id,

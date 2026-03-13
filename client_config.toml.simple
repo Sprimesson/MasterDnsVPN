@@ -110,6 +110,45 @@ MTU_SERVERS_FILE_NAME = "masterdnsvpn_success_test_{time}.txt"
 # Example minimal format: "{IP}"
 MTU_SERVERS_FILE_FORMAT = "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
 
+# Optional text appended once after initial MTU scan is finished.
+# Empty string = disabled.
+MTU_USING_SECTION_SEPARATOR_TEXT = "---- Active MTU Testing Results ----"
+
+# Optional runtime log line (written to MTU output file) when a server is auto-disabled.
+# Empty string = disabled.
+# Supported placeholders:
+# {IP}, {DOMAIN}, {CAUSE}, {TIME}, {UP_MTU}, {DOWN_MTU}
+MTU_REMOVED_SERVER_LOG_FORMAT = "IP {IP} removed from list at {TIME} due to {CAUSE}"
+
+# Optional runtime log line (written to MTU output file) when a server is re-added.
+# Empty string = disabled.
+# Supported placeholders:
+# {IP}, {DOMAIN}, {TIME}, {UP_MTU}, {DOWN_MTU}
+MTU_ADDED_SERVER_LOG_FORMAT = "Server {IP} re-added at {TIME} (UP MTU: {UP_MTU}, DOWN MTU: {DOWN_MTU})"
+
+# Auto-disable a resolver/domain pair during runtime if it has 100% timeouts
+# across the configured observation window (while at least one other active server exists).
+AUTO_DISABLE_TIMEOUT_SERVERS = true
+AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS = 300
+
+# Minimum resolved observations (timeout/success events) required before disable decision.
+# Higher value reduces false positives on low-traffic clients.
+AUTO_DISABLE_TIMEOUT_MIN_OBSERVATIONS = 3
+
+# Health worker polling interval.
+AUTO_DISABLE_CHECK_INTERVAL_SECONDS = 1.0
+
+# Recheck invalid servers (initial MTU fail + runtime-disabled) periodically.
+RECHECK_INACTIVE_SERVERS_ENABLED = true
+
+# A full recheck cycle starts this many seconds after initial scan completion,
+# then repeats with the same interval.
+RECHECK_INACTIVE_INTERVAL_SECONDS = 1800
+
+# Delay between testing two inactive servers in background mode.
+# Minimum is always enforced as 3 seconds.
+RECHECK_SERVER_INTERVAL_SECONDS = 3.0
+
 # ------------------------------------------------------------------------------
 # 5) ARQ / Reliability
 # ------------------------------------------------------------------------------

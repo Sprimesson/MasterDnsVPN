@@ -242,13 +242,9 @@ class MasterDnsVPNServer(PacketQueueMixin):
         # Heavy packet handlers are deferred to background tasks so DNS responses
         # can be returned immediately from queue without waiting on local I/O.
         self._deferred_handler_packet_types = {
-            Packet_Type.STREAM_SYN,
             Packet_Type.SOCKS5_SYN,
             Packet_Type.STREAM_DATA,
             Packet_Type.STREAM_RESEND,
-            Packet_Type.STREAM_FIN,
-            Packet_Type.STREAM_RST,
-            Packet_Type.STREAM_FIN_ACK,
             Packet_Type.PACKED_CONTROL_BLOCKS,
         }
         self._control_request_ack_map = {
@@ -754,12 +750,22 @@ class MasterDnsVPNServer(PacketQueueMixin):
 
         if packet_type == Packet_Type.STREAM_FIN:
             await self._enqueue_packet(
-                session_id, 0, stream_id, sn, Packet_Type.STREAM_FIN_ACK, b""
+                session_id,
+                0,
+                stream_id,
+                sn,
+                Packet_Type.STREAM_FIN_ACK,
+                b"FA" + os.urandom(4),
             )
             return True
         if packet_type == Packet_Type.STREAM_RST:
             await self._enqueue_packet(
-                session_id, 0, stream_id, sn, Packet_Type.STREAM_RST_ACK, b""
+                session_id,
+                0,
+                stream_id,
+                sn,
+                Packet_Type.STREAM_RST_ACK,
+                b"RA" + os.urandom(4),
             )
             return True
         if packet_type in (
@@ -773,7 +779,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 0,
                 Packet_Type.STREAM_RST,
-                b"RST:" + os.urandom(4),
+                b"RS" + os.urandom(4),
             )
             return True
         return False
@@ -1246,6 +1252,139 @@ class MasterDnsVPNServer(PacketQueueMixin):
             )
         return None
 
+    async def _process_session_packet(
+        self,
+        packet_type: int,
+        session_id: int,
+        stream_id: int,
+        sn: int,
+        labels: str,
+        extracted_header: Optional[dict],
+        now_mono: float,
+    ) -> None:
+        """Process a session packet without blocking response generation."""
+        handled_closed_stream = await self._handle_closed_stream_packet(
+            session_id, stream_id, packet_type, sn
+        )
+
+        if handled_closed_stream:
+            return
+
+        await self._dispatch_stream_packet_nonblocking(
+            packet_type=packet_type,
+            session_id=session_id,
+            stream_id=stream_id,
+            sn=sn,
+            labels=labels,
+            extracted_header=extracted_header,
+            now_mono=now_mono,
+        )
+
+    def _dequeue_response_packet(self, session: dict, streams: dict):
+        """Pop one outbound packet from queues, packing small control blocks when possible."""
+        res_data = None
+        res_stream_id = 0
+        res_sn = 0
+        res_ptype = Packet_Type.PONG
+
+        target_queue = None
+        is_main = False
+        selected_stream_data = None
+
+        main_queue = session.get("main_queue")
+
+        active_stream_ids = [
+            sid for sid, sdata in streams.items() if sdata.get("tx_queue")
+        ]
+        selected_stream_id = None
+
+        if active_stream_ids:
+            num_active = len(active_stream_ids)
+            rr_index = int(session.get("round_robin_index", 0))
+            if rr_index >= num_active:
+                rr_index = 0
+
+            selected_stream_id = active_stream_ids[rr_index]
+            selected_stream_data = streams[selected_stream_id]
+            t_queue = selected_stream_data["tx_queue"]
+
+            if main_queue and main_queue[0][0] < t_queue[0][0]:
+                target_queue = main_queue
+                is_main = True
+            else:
+                target_queue = t_queue
+                session["round_robin_index"] = (rr_index + 1) % num_active
+        elif main_queue:
+            target_queue = main_queue
+            is_main = True
+
+        if target_queue:
+            item = heapq.heappop(target_queue)
+            q_ptype, q_stream_id, q_sn = item[2], item[3], item[4]
+
+            pop_owner = session if is_main else selected_stream_data
+            if pop_owner is not None:
+                self._on_queue_pop(pop_owner, item)
+            res_ptype, res_stream_id, res_sn, res_data = (
+                q_ptype,
+                q_stream_id,
+                q_sn,
+                item[5],
+            )
+
+            if (
+                res_ptype in self._packable_control_types
+                and not res_data
+                and session["max_packed_blocks"] > 1
+            ):
+                _pack = self._block_packer.pack
+                packed_buffer = bytearray(_pack(res_ptype, res_stream_id, res_sn))
+                blocks = 1
+                max_blocks = session["max_packed_blocks"]
+                target_priority = int(item[0])
+
+                candidate_queues = []
+                ordered_stream_ids = active_stream_ids
+                if (not is_main) and selected_stream_id in active_stream_ids:
+                    start_idx = active_stream_ids.index(selected_stream_id)
+                    ordered_stream_ids = (
+                        active_stream_ids[start_idx:] + active_stream_ids[:start_idx]
+                    )
+
+                for sid in ordered_stream_ids:
+                    sdata = streams.get(sid)
+                    if sdata and sdata.get("tx_queue"):
+                        candidate_queues.append((sdata["tx_queue"], sdata))
+
+                if main_queue:
+                    candidate_queues.append((main_queue, session))
+
+                while blocks < max_blocks:
+                    packed_any = False
+                    for q_ref, owner in candidate_queues:
+                        popped = self._pop_packable_control_block(
+                            q_ref, owner, target_priority
+                        )
+                        if popped is None:
+                            continue
+
+                        packed_buffer.extend(_pack(popped[2], popped[3], popped[4]))
+                        blocks += 1
+                        packed_any = True
+                        if blocks >= max_blocks:
+                            break
+
+                    if not packed_any:
+                        break
+
+                if blocks > 1:
+                    res_ptype = Packet_Type.PACKED_CONTROL_BLOCKS
+                    res_stream_id = 0
+                    res_sn = 0
+                    res_data = bytes(packed_buffer)
+
+        return res_ptype, res_stream_id, res_sn, res_data
+
     def _build_invalid_session_error_response(
         self,
         session_id: int,
@@ -1321,126 +1460,24 @@ class MasterDnsVPNServer(PacketQueueMixin):
         stream_id = extracted_header.get("stream_id", 0) if extracted_header else 0
         sn = extracted_header.get("sequence_num", 0) if extracted_header else 0
 
-        handled_closed_stream = await self._handle_closed_stream_packet(
-            session_id, stream_id, packet_type, sn
-        )
-
         streams = session.get("streams")
         if streams is None:
             session["streams"] = {}
             streams = session["streams"]
 
-        # If this packet belongs to a closed stream, we already generated the
-        # proper ACK/RST response and must avoid re-dispatching it.
-        if not handled_closed_stream:
-            await self._dispatch_stream_packet_nonblocking(
-                packet_type=packet_type,
-                session_id=session_id,
-                stream_id=stream_id,
-                sn=sn,
-                labels=labels,
-                extracted_header=extracted_header,
-                now_mono=now_mono,
-            )
-        res_data = None
-        res_stream_id = 0
-        res_sn = 0
-        res_ptype = Packet_Type.PONG
+        await self._process_session_packet(
+            packet_type=packet_type,
+            session_id=session_id,
+            stream_id=stream_id,
+            sn=sn,
+            labels=labels,
+            extracted_header=extracted_header,
+            now_mono=now_mono,
+        )
 
-        target_queue = None
-        is_main = False
-        selected_stream_data = None
-
-        main_queue = session.get("main_queue")
-
-        active_stream_ids = [
-            sid for sid, sdata in streams.items() if sdata.get("tx_queue")
-        ]
-        selected_stream_id = None
-
-        if active_stream_ids:
-            num_active = len(active_stream_ids)
-            rr_index = int(session.get("round_robin_index", 0))
-            if rr_index >= num_active:
-                rr_index = 0
-
-            selected_stream_id = active_stream_ids[rr_index]
-            selected_stream_data = streams[selected_stream_id]
-            t_queue = selected_stream_data["tx_queue"]
-
-            if main_queue and main_queue[0][0] < t_queue[0][0]:
-                target_queue = main_queue
-                is_main = True
-            else:
-                target_queue = t_queue
-                session["round_robin_index"] = (rr_index + 1) % num_active
-        elif main_queue:
-            target_queue = main_queue
-            is_main = True
-        if target_queue:
-            item = heapq.heappop(target_queue)
-            q_ptype, q_stream_id, q_sn = item[2], item[3], item[4]
-
-            pop_owner = session if is_main else selected_stream_data
-            if pop_owner is not None:
-                self._on_queue_pop(pop_owner, item)
-            res_ptype, res_stream_id, res_sn, res_data = (
-                q_ptype,
-                q_stream_id,
-                q_sn,
-                item[5],
-            )
-
-            if (
-                res_ptype in self._packable_control_types
-                and not res_data
-                and session["max_packed_blocks"] > 1
-            ):
-                _pack = self._block_packer.pack
-                packed_buffer = bytearray(_pack(res_ptype, res_stream_id, res_sn))
-                blocks = 1
-                max_blocks = session["max_packed_blocks"]
-                target_priority = int(item[0])
-
-                candidate_queues = []
-                ordered_stream_ids = active_stream_ids
-                if (not is_main) and selected_stream_id in active_stream_ids:
-                    start_idx = active_stream_ids.index(selected_stream_id)
-                    ordered_stream_ids = (
-                        active_stream_ids[start_idx:] + active_stream_ids[:start_idx]
-                    )
-
-                for sid in ordered_stream_ids:
-                    sdata = streams.get(sid)
-                    if sdata and sdata.get("tx_queue"):
-                        candidate_queues.append((sdata["tx_queue"], sdata))
-
-                # main_queue is fallback/source for same-priority compact controls.
-                if main_queue:
-                    candidate_queues.append((main_queue, session))
-                while blocks < max_blocks:
-                    packed_any = False
-                    for q_ref, owner in candidate_queues:
-                        popped = self._pop_packable_control_block(
-                            q_ref, owner, target_priority
-                        )
-                        if popped is None:
-                            continue
-
-                        packed_buffer.extend(_pack(popped[2], popped[3], popped[4]))
-                        blocks += 1
-                        packed_any = True
-                        if blocks >= max_blocks:
-                            break
-
-                    if not packed_any:
-                        break
-
-                if blocks > 1:
-                    res_ptype = Packet_Type.PACKED_CONTROL_BLOCKS
-                    res_stream_id = 0
-                    res_sn = 0
-                    res_data = bytes(packed_buffer)
+        res_ptype, res_stream_id, res_sn, res_data = self._dequeue_response_packet(
+            session, streams
+        )
 
         if res_ptype == Packet_Type.PONG:
             res_data = b"PO:" + os.urandom(4)

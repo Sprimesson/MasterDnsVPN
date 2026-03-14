@@ -16,6 +16,7 @@ import socket
 import struct
 import sys
 import time
+from bisect import bisect_left, bisect_right, insort
 from collections import deque
 from typing import Optional
 
@@ -427,7 +428,9 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 "init_token": client_token,
                 "streams": {},
                 "main_queue": [],
-                "round_robin_index": 0,
+                "active_response_ids": [],
+                "active_response_set": set(),
+                "round_robin_stream_id": -1,
                 "enqueue_seq": 0,
                 "priority_counts": {},
                 "track_ack": set(),
@@ -492,6 +495,8 @@ class MasterDnsVPNServer(PacketQueueMixin):
             session.get("track_seq_packets", set()).clear()
             session.get("track_fragment_packets", set()).clear()
             session.get("priority_counts", {}).clear()
+            session.get("active_response_ids", []).clear()
+            session.get("active_response_set", set()).clear()
             session.get("streams", {}).clear()
         except Exception:
             pass
@@ -516,6 +521,27 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 session["last_packet_time"] = time.monotonic()
         except Exception:
             pass
+
+    def _activate_response_queue(self, session: dict, stream_id: int) -> None:
+        sid = int(stream_id)
+        active_set = session.setdefault("active_response_set", set())
+        if sid in active_set:
+            return
+        active_set.add(sid)
+        insort(session.setdefault("active_response_ids", []), sid)
+
+    def _deactivate_response_queue(self, session: dict, stream_id: int) -> None:
+        sid = int(stream_id)
+        active_set = session.get("active_response_set")
+        if not active_set or sid not in active_set:
+            return
+        active_set.discard(sid)
+        active_ids = session.get("active_response_ids")
+        if not active_ids:
+            return
+        idx = bisect_left(active_ids, sid)
+        if idx < len(active_ids) and active_ids[idx] == sid:
+            active_ids.pop(idx)
 
     def _extract_packet_payload(
         self, labels: str, extracted_header: Optional[dict]
@@ -1401,32 +1427,45 @@ class MasterDnsVPNServer(PacketQueueMixin):
             return
 
         _unpack_from = self._block_packer.unpack_from
-        block_tasks = []
         block_size = self._block_packer.size
+        handlers = self._stream_packet_handlers
+        deferred_types = self._deferred_handler_packet_types
+        spawn_task = self._spawn_background_task
+        loop = self.loop
+        inline_batch = []
         for i in range(0, len(extracted_data), block_size):
             if i + block_size > len(extracted_data):
                 break
             b_ptype, b_stream_id, b_sn = _unpack_from(extracted_data, i)
-            if b_ptype not in self._valid_packet_types:
+            if (
+                b_ptype not in self._valid_packet_types
+                or b_ptype == Packet_Type.PACKED_CONTROL_BLOCKS
+            ):
                 continue
 
-            block_tasks.append(
-                self._dispatch_stream_packet(
-                    packet_type=b_ptype,
-                    session_id=session_id,
-                    stream_id=b_stream_id,
-                    sn=b_sn,
-                    labels="",
-                    extracted_header={"packet_type": b_ptype},
-                    now_mono=now_mono,
-                )
-            )
+            handler = handlers.get(b_ptype)
+            if not handler:
+                continue
 
-        for idx in range(0, len(block_tasks), 8):
-            await asyncio.gather(
-                *block_tasks[idx : idx + 8],
-                return_exceptions=True,
+            block_coro = handler(
+                session_id,
+                b_stream_id,
+                b_sn,
+                "",
+                {"packet_type": b_ptype},
+                now_mono,
             )
+            if b_ptype in deferred_types and loop:
+                spawn_task(block_coro)
+                continue
+
+            inline_batch.append(block_coro)
+            if len(inline_batch) >= 8:
+                await asyncio.gather(*inline_batch, return_exceptions=True)
+                inline_batch.clear()
+
+        if inline_batch:
+            await asyncio.gather(*inline_batch, return_exceptions=True)
 
     async def _dispatch_stream_packet(
         self, packet_type, session_id, stream_id, sn, labels, extracted_header, now_mono
@@ -1435,6 +1474,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         handler = self._stream_packet_handlers.get(packet_type)
         if not handler:
             return
+
         await handler(session_id, stream_id, sn, labels, extracted_header, now_mono)
 
     async def _dispatch_stream_packet_nonblocking(
@@ -1526,83 +1566,104 @@ class MasterDnsVPNServer(PacketQueueMixin):
             now_mono=now_mono,
         )
 
-    def _iter_active_response_queues(self, session: dict, streams: dict) -> list[tuple]:
+    def _get_active_response_queue(
+        self, session: dict, streams: dict, stream_id: int
+    ) -> tuple[Optional[list], Optional[dict]]:
         """
-        Return active response queues as round-robin participants.
-        stream_id 0 represents the session main queue.
+        Resolve one active response queue by stream_id.
+        stream_id 0 is the session main queue.
+        If the cached active id became stale, drop it immediately.
         """
-        queue_entries = []
+        sid = int(stream_id)
+        if sid == 0:
+            main_queue = session.get("main_queue")
+            if main_queue:
+                return main_queue, session
+        else:
+            stream_data = streams.get(sid)
+            if stream_data:
+                tx_queue = stream_data.get("tx_queue")
+                if tx_queue:
+                    return tx_queue, stream_data
 
-        main_queue = session.get("main_queue")
-        if main_queue:
-            queue_entries.append((0, main_queue, session))
-
-        for sid, stream_data in streams.items():
-            if int(sid) <= 0:
-                continue
-            if stream_data and stream_data.get("tx_queue"):
-                queue_entries.append((sid, stream_data["tx_queue"], stream_data))
-
-        return queue_entries
+        self._deactivate_response_queue(session, sid)
+        return None, None
 
     def _pack_selected_response_blocks(
         self,
-        selected_idx: int,
-        queue_entries: list[tuple],
+        session: dict,
+        streams: dict,
+        selected_stream_id: int,
+        selected_queue,
+        selected_owner: dict,
         first_item: tuple,
         max_blocks: int,
     ) -> bytes:
         """
-        Pack same-priority control blocks starting from the selected queue, then
-        do a single pass over the remaining queues to fill the available slots.
+        Pack same-priority payload-less control blocks starting from the selected
+        queue, then do one circular pass over the remaining active queues.
         """
         if max_blocks <= 1:
             return b""
 
         target_priority = int(first_item[0])
-        target_ptype = int(first_item[2])
         _pack = self._block_packer.pack
-        packed_buffer = bytearray(_pack(target_ptype, first_item[3], first_item[4]))
+        _pop_packable = self._pop_packable_control_block
+        _owner_has_priority = self._owner_has_priority
+        packed_buffer = bytearray(_pack(first_item[2], first_item[3], first_item[4]))
         blocks = 1
 
-        _, selected_queue, selected_owner = queue_entries[selected_idx]
-
-        while blocks < max_blocks and self._owner_has_priority(
-            selected_owner, target_priority
-        ):
-            popped = self._pop_packable_control_block(
+        while blocks < max_blocks:
+            popped = _pop_packable(
                 selected_queue,
                 selected_owner,
                 target_priority,
-                packet_type=target_ptype,
             )
             if popped is None:
                 break
             packed_buffer.extend(_pack(popped[2], popped[3], popped[4]))
             blocks += 1
+            if not selected_queue:
+                self._deactivate_response_queue(session, selected_stream_id)
+                break
 
         if blocks >= max_blocks:
             return bytes(packed_buffer)
 
-        num_queues = len(queue_entries)
-        for offset in range(1, num_queues):
+        active_ids = tuple(session.get("active_response_ids", ()))
+        if not active_ids:
+            return bytes(packed_buffer)
+
+        num_queues = len(active_ids)
+        start_pos = bisect_right(active_ids, selected_stream_id)
+        if start_pos >= num_queues:
+            start_pos = 0
+
+        for offset in range(num_queues):
             if blocks >= max_blocks:
                 break
-            _, q_ref, owner = queue_entries[(selected_idx + offset) % num_queues]
-            if not self._owner_has_priority(owner, target_priority):
+            sid = active_ids[(start_pos + offset) % num_queues]
+            if sid == selected_stream_id:
+                continue
+            q_ref, owner = self._get_active_response_queue(session, streams, sid)
+            if not q_ref or not owner:
+                continue
+            if not _owner_has_priority(owner, target_priority):
                 continue
 
             while blocks < max_blocks:
-                popped = self._pop_packable_control_block(
+                popped = _pop_packable(
                     q_ref,
                     owner,
                     target_priority,
-                    packet_type=target_ptype,
                 )
                 if popped is None:
                     break
                 packed_buffer.extend(_pack(popped[2], popped[3], popped[4]))
                 blocks += 1
+                if not q_ref:
+                    self._deactivate_response_queue(session, sid)
+                    break
 
         return bytes(packed_buffer) if blocks > 1 else b""
 
@@ -1616,23 +1677,37 @@ class MasterDnsVPNServer(PacketQueueMixin):
         res_sn = 0
         res_ptype = Packet_Type.PONG
 
-        queue_entries = self._iter_active_response_queues(session, streams)
-        if not queue_entries:
+        active_ids = session.get("active_response_ids", [])
+        if not active_ids:
             return res_ptype, res_stream_id, res_sn, res_data
 
-        rr_index = int(session.get("round_robin_index", 0))
-        num_queues = len(queue_entries)
-        if rr_index >= num_queues:
-            rr_index = 0
-        elif rr_index < 0:
-            rr_index = 0
+        last_stream_id = int(session.get("round_robin_stream_id", -1))
+        selected_pos = bisect_right(active_ids, last_stream_id)
+        attempts = len(active_ids)
+        target_queue = None
+        pop_owner = None
+        selected_stream_id = 0
 
-        selected_idx = rr_index % num_queues
-        _, target_queue, pop_owner = queue_entries[selected_idx]
+        while attempts > 0 and active_ids:
+            if selected_pos >= len(active_ids):
+                selected_pos = 0
+            candidate_stream_id = active_ids[selected_pos]
+            target_queue, pop_owner = self._get_active_response_queue(
+                session, streams, candidate_stream_id
+            )
+            if target_queue and pop_owner:
+                selected_stream_id = candidate_stream_id
+                break
+            attempts -= 1
+
+        if not target_queue or not pop_owner:
+            return res_ptype, res_stream_id, res_sn, res_data
 
         item = heapq.heappop(target_queue)
         self._on_queue_pop(pop_owner, item)
-        session["round_robin_index"] = (selected_idx + 1) % num_queues
+        if not target_queue:
+            self._deactivate_response_queue(session, selected_stream_id)
+        session["round_robin_stream_id"] = selected_stream_id
 
         res_ptype, res_stream_id, res_sn, res_data = (
             item[2],
@@ -1647,8 +1722,11 @@ class MasterDnsVPNServer(PacketQueueMixin):
             and session["max_packed_blocks"] > 1
         ):
             packed = self._pack_selected_response_blocks(
-                selected_idx=selected_idx,
-                queue_entries=queue_entries,
+                session=session,
+                streams=streams,
+                selected_stream_id=selected_stream_id,
+                selected_queue=target_queue,
+                selected_owner=pop_owner,
                 first_item=item,
                 max_blocks=session["max_packed_blocks"],
             )
@@ -2393,6 +2471,8 @@ class MasterDnsVPNServer(PacketQueueMixin):
         pending_tx = stream_data.get("tx_queue", [])
         if pending_tx:
             main_q = session.setdefault("main_queue", [])
+            main_was_empty = not main_q
+            moved_any = False
             for item in pending_tx:
                 ptype = int(item[2])
                 if (
@@ -2406,9 +2486,12 @@ class MasterDnsVPNServer(PacketQueueMixin):
                         int(item[4]),
                         payload=item[5],
                     ):
-                        heapq.heappush(main_q, item)
-                        self._inc_priority_counter(session, item[0])
+                        self._push_queue_item(main_q, session, item)
+                        moved_any = True
                     self._dec_priority_counter(stream_data, item[0])
+
+            if main_was_empty and moved_any:
+                self._activate_response_queue(session, 0)
 
         try:
             stream_data["tx_queue"].clear()
@@ -2426,6 +2509,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_data["priority_counts"].clear()
             stream_data["status"] = "TIME_WAIT"
             stream_data["close_time"] = time.monotonic()
+            self._deactivate_response_queue(session, stream_id)
         except Exception:
             pass
 
@@ -2482,7 +2566,10 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 session, stream_id, ptype, sn, payload=data
             ):
                 return
+            was_empty = not session["main_queue"]
             self._push_queue_item(session["main_queue"], session, queue_item)
+            if was_empty:
+                self._activate_response_queue(session, 0)
             return
 
         stream_data = session.get("streams", {}).get(stream_id)
@@ -2498,7 +2585,10 @@ class MasterDnsVPNServer(PacketQueueMixin):
                     session, stream_id, ptype, sn, payload=data
                 ):
                     return
+                was_empty = not session["main_queue"]
                 self._push_queue_item(session["main_queue"], session, queue_item)
+                if was_empty:
+                    self._activate_response_queue(session, 0)
             return
 
         # Normal per-stream traffic uses stream-local dedupe so duplicate control/data
@@ -2511,7 +2601,10 @@ class MasterDnsVPNServer(PacketQueueMixin):
             payload=data,
         ):
             return
+        was_empty = not stream_data["tx_queue"]
         self._push_queue_item(stream_data["tx_queue"], stream_data, queue_item)
+        if was_empty:
+            self._activate_response_queue(session, stream_id)
 
     async def _handle_stream_syn(self, session_id, stream_id, syn_sn=0):
         session = self.sessions.get(session_id)

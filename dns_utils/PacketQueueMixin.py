@@ -211,7 +211,6 @@ class PacketQueueMixin:
         queue,
         owner: dict,
         priority: int,
-        packet_type: int | None = None,
     ):
         # Packing only consumes the queue head to preserve per-queue ordering.
         if not queue:
@@ -220,10 +219,6 @@ class PacketQueueMixin:
         if int(item[0]) != int(priority):
             return None
         ptype = int(item[2])
-        # When the first block defines a type, only identical control blocks may join
-        # the packed response; mixed packet types are intentionally left in queue.
-        if packet_type is not None and ptype != int(packet_type):
-            return None
         payload = item[5]
         # Only payload-less control packets are safe to coalesce into a packed block.
         if ptype not in self._packable_control_types or payload:

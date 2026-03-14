@@ -885,18 +885,121 @@ class MasterDnsVPNServer(PacketQueueMixin):
 
         return Packet_Type.SOCKS5_CONNECT_FAIL
 
-    async def _send_socks5_error_packet(
-        self, session_id: int, stream_id: int, packet_type: int
+    def _cache_response(
+        self,
+        stream_data: dict | None,
+        response_key,
+        *,
+        packet_type: int,
+        payload: bytes = b"",
+        priority: int = 0,
+        sequence_num: int = 0,
     ) -> None:
-        """Queue SOCKS5 error packet for client."""
+        """Store one cached SYN-family response in the per-stream response cache."""
+        if not stream_data:
+            return
+
+        stream_data.setdefault("syn_responses", {})[response_key] = {
+            "packet_type": int(packet_type),
+            "payload": payload or b"",
+            "priority": int(priority),
+            "sequence_num": int(sequence_num) & 0xFFFF,
+            "updated_at": time.monotonic(),
+            "last_replay": 0.0,
+        }
+
+    async def _enqueue_cached_response(
+        self,
+        session_id: int,
+        stream_id: int,
+        stream_data: dict | None,
+        response_key,
+        *,
+        sequence_num: int | None = None,
+    ) -> bool:
+        """Replay a cached response instead of re-running stream/SOCKS setup work."""
+        if not stream_data:
+            return False
+
+        cached = stream_data.get("syn_responses", {}).get(response_key)
+        if not cached:
+            return False
+
+        cached["last_replay"] = time.monotonic()
+        replay_sn = (
+            int(sequence_num) & 0xFFFF
+            if sequence_num is not None
+            else int(cached.get("sequence_num", 0)) & 0xFFFF
+        )
         await self._enqueue_packet(
             session_id,
-            0,
+            int(cached.get("priority", 0)),
             stream_id,
-            0,
-            int(packet_type),
-            b"",
+            replay_sn,
+            int(cached["packet_type"]),
+            cached.get("payload", b""),
         )
+        return True
+
+    async def _queue_and_cache_response(
+        self,
+        session_id: int,
+        stream_id: int,
+        stream_data: dict | None,
+        response_key,
+        *,
+        packet_type: int,
+        payload: bytes = b"",
+        priority: int = 0,
+        sequence_num: int = 0,
+    ) -> None:
+        """Cache the response metadata first, then enqueue it through normal dedupe."""
+        self._cache_response(
+            stream_data,
+            response_key,
+            packet_type=packet_type,
+            payload=payload,
+            priority=priority,
+            sequence_num=sequence_num,
+        )
+        await self._enqueue_packet(
+            session_id,
+            priority,
+            stream_id,
+            sequence_num,
+            int(packet_type),
+            payload or b"",
+        )
+
+    async def _send_socks5_error_packet(
+        self,
+        session_id: int,
+        stream_id: int,
+        packet_type: int,
+        stream_data: dict | None = None,
+        fragment_id: int | None = None,
+    ) -> None:
+        """Queue SOCKS5 error packet for client."""
+        payload = b"SE" + os.urandom(4)
+        await self._queue_and_cache_response(
+            session_id,
+            stream_id,
+            stream_data,
+            "socks",
+            packet_type=int(packet_type),
+            payload=payload,
+            priority=0,
+            sequence_num=0,
+        )
+        if stream_data is not None and fragment_id is not None:
+            self._cache_response(
+                stream_data,
+                ("socks_frag", int(fragment_id) & 0xFF),
+                packet_type=int(packet_type),
+                payload=payload,
+                priority=0,
+                sequence_num=0,
+            )
 
     async def _handle_socks5_syn_packet(
         self, session_id, stream_id, sn, labels, extracted_header, now_mono
@@ -906,21 +1009,43 @@ class MasterDnsVPNServer(PacketQueueMixin):
         if not session:
             return
 
-        if stream_id in session.get("closed_streams", {}):
-            await self._enqueue_packet(
-                session_id, 1, stream_id, 0, Packet_Type.STREAM_FIN, b""
-            )
-            return
+        frag_id = int(extracted_header.get("fragment_id", 0)) if extracted_header else 0
+        expected_chunk_count = (
+            int(extracted_header.get("total_fragments", 1)) if extracted_header else 1
+        )
 
         streams = session.setdefault("streams", {})
         stream_data = streams.get(stream_id)
-        if not stream_data:
+        if stream_data:
+            if await self._enqueue_cached_response(
+                session_id,
+                stream_id,
+                stream_data,
+                ("socks_frag", int(frag_id) & 0xFF),
+            ):
+                return
+
+            if await self._enqueue_cached_response(
+                session_id,
+                stream_id,
+                stream_data,
+                "socks",
+            ):
+                return
+
+            if stream_data.get("status") != "PENDING":
+                return
+
+        elif stream_id in session.get("closed_streams", {}):
+            # Recently closed streams must never restart SOCKS setup from a late SYN.
+            return
+        else:
             now = time.monotonic()
             stream_data = {
                 "stream_id": stream_id,
                 "created_at": now,
                 "last_activity": now,
-                "status": "SOCKS_HANDSHAKE",
+                "status": "PENDING",
                 "arq_obj": None,
                 "tx_queue": [],
                 "priority_counts": {},
@@ -931,59 +1056,124 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 "track_resend": set(),
                 "track_types": set(),
                 "socks_chunks": {},
+                "syn_responses": {},
+                "socks_expected_frags": None,
             }
             streams[stream_id] = stream_data
 
         stream_data["last_activity"] = now_mono
 
-        if stream_data["status"] == "CONNECTED":
-            now_ack = time.monotonic()
-            last_syn_ack = stream_data.get("last_socks_syn_ack", 0.0)
-            if now_ack - last_syn_ack >= 0.5:
-                stream_data["last_socks_syn_ack"] = now_ack
+        if expected_chunk_count < 1 or expected_chunk_count > 20:
+            await self._send_socks5_error_packet(
+                session_id,
+                stream_id,
+                Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+                stream_data=stream_data,
+                fragment_id=frag_id,
+            )
+            await self.close_stream(
+                session_id,
+                stream_id,
+                reason="Invalid SOCKS5 fragment count",
+                abortive=True,
+            )
+            return
+
+        if frag_id < 0 or frag_id >= expected_chunk_count:
+            await self._send_socks5_error_packet(
+                session_id,
+                stream_id,
+                Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+                stream_data=stream_data,
+                fragment_id=frag_id,
+            )
+            await self.close_stream(
+                session_id,
+                stream_id,
+                reason="Invalid SOCKS5 fragment index",
+                abortive=True,
+            )
+            return
+
+        stored_expected = stream_data.get("socks_expected_frags")
+        if stored_expected is None:
+            stream_data["socks_expected_frags"] = expected_chunk_count
+        elif int(stored_expected) != expected_chunk_count:
+            return
+
+        socks_chunks = stream_data.get("socks_chunks", {})
+        extracted_data = self._extract_packet_payload(labels, extracted_header)
+        if not extracted_data or len(extracted_data) < 1:
+            return
+
+        existing_fragment = socks_chunks.get(frag_id)
+        if existing_fragment is not None:
+            if existing_fragment != extracted_data:
+                return
+            await self._enqueue_cached_response(
+                session_id,
+                stream_id,
+                stream_data,
+                ("socks_frag", int(frag_id) & 0xFF),
+            )
+            return
+
+        socks_chunks[frag_id] = extracted_data
+
+        if len(socks_chunks) > expected_chunk_count:
+            # Too many fragments received, possible attack or client bug. Stop processing.
+            await self._send_socks5_error_packet(
+                session_id,
+                stream_id,
+                Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+                stream_data=stream_data,
+                fragment_id=frag_id,
+            )
+            await self.close_stream(
+                session_id,
+                stream_id,
+                reason="Too many SOCKS5 fragments received",
+                abortive=True,
+            )
+            return
+
+        if len(socks_chunks) < expected_chunk_count:
+            if expected_chunk_count > 1:
+                fragment_payload = bytes(
+                    (
+                        ord("S"),
+                        ord("F"),
+                        ord("R"),
+                        int(frag_id) & 0xFF,
+                        int(expected_chunk_count) & 0xFF,
+                        len(socks_chunks) & 0xFF,
+                    )
+                )
+                self._cache_response(
+                    stream_data,
+                    ("socks_frag", int(frag_id) & 0xFF),
+                    packet_type=Packet_Type.SOCKS5_SYN_ACK,
+                    payload=fragment_payload,
+                    priority=0,
+                    sequence_num=0,
+                )
                 await self._enqueue_packet(
-                    session_id, 2, stream_id, 0, Packet_Type.SOCKS5_SYN_ACK, b""
+                    session_id,
+                    0,
+                    stream_id,
+                    0,
+                    Packet_Type.SOCKS5_SYN_ACK,
+                    fragment_payload,
                 )
             return
 
-        if stream_data["status"] == "SOCKS_CONNECTING":
+        stream_data["status"] = "SOCKS_HANDSHAKE"
+
+        # join chunks and start
+        if any(i not in socks_chunks for i in range(expected_chunk_count)):
             return
 
-        if stream_data["status"] not in ("SOCKS_HANDSHAKE", "PENDING"):
-            return
-
-        stream_data.setdefault("socks_chunks", {})
-        if stream_data.get("status") == "PENDING":
-            stream_data["status"] = "SOCKS_HANDSHAKE"
-
-        frag_id = int(extracted_header.get("fragment_id", 0)) if extracted_header else 0
-        expected_chunk_count = (
-            int(extracted_header.get("total_fragments", 1)) if extracted_header else 1
-        )
-        if expected_chunk_count <= 0:
-            expected_chunk_count = 1
-        expected_chunk_count = min(expected_chunk_count, 64)
-
-        if stream_data.get("socks_expected_frags") not in (None, expected_chunk_count):
-            # New SOCKS5_SYN series with different fragmentation profile.
-            stream_data["socks_chunks"].clear()
-        stream_data["socks_expected_frags"] = expected_chunk_count
-
-        extracted_data = self._extract_packet_payload(labels, extracted_header)
-        if extracted_data and 0 <= frag_id < expected_chunk_count:
-            stream_data["socks_chunks"][frag_id] = extracted_data
-
-        chunks = stream_data["socks_chunks"]
-        if 0 not in chunks:
-            return
-
-        if len(chunks) != expected_chunk_count:
-            return
-
-        if any(i not in chunks for i in range(expected_chunk_count)):
-            return
-
-        assembled = b"".join(chunks[i] for i in range(expected_chunk_count))
+        assembled = b"".join(socks_chunks[i] for i in range(expected_chunk_count))
         if len(assembled) < 1:
             return
 
@@ -998,23 +1188,46 @@ class MasterDnsVPNServer(PacketQueueMixin):
 
         if expected_len == -1:
             await self._send_socks5_error_packet(
-                session_id, stream_id, Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED
+                session_id,
+                stream_id,
+                Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+                stream_data=stream_data,
+                fragment_id=frag_id,
             )
             await self.close_stream(
-                session_id, stream_id, reason="SOCKS5 address type unsupported"
+                session_id,
+                stream_id,
+                reason="SOCKS5 address type unsupported",
+                abortive=True,
             )
             return
         if len(assembled) < expected_len:
+            await self._send_socks5_error_packet(
+                session_id,
+                stream_id,
+                Packet_Type.SOCKS5_CONNECT_FAIL,
+                stream_data=stream_data,
+                fragment_id=frag_id,
+            )
+            await self.close_stream(
+                session_id,
+                stream_id,
+                reason="Truncated SOCKS5 target payload",
+                abortive=True,
+            )
             return
         if len(assembled) > expected_len:
             assembled = assembled[:expected_len]
 
         stream_data["status"] = "SOCKS_CONNECTING"
+        stream_data["socks_expected_frags"] = None
         stream_data.get("socks_chunks", {}).clear()
-        if self.loop:
-            self._spawn_background_task(
-                self._process_socks5_target(session_id, stream_id, assembled)
-            )
+        await self._process_socks5_target(
+            session_id,
+            stream_id,
+            assembled,
+            response_fragment_id=frag_id if expected_chunk_count > 1 else None,
+        )
 
     async def _handle_stream_fin_packet(
         self, session_id, stream_id, sn, labels, extracted_header, now_mono
@@ -1043,7 +1256,12 @@ class MasterDnsVPNServer(PacketQueueMixin):
     ):
         """Handle STREAM_RST packets."""
         await self._enqueue_packet(
-            session_id, 0, stream_id, sn, Packet_Type.STREAM_RST_ACK, b""
+            session_id,
+            0,
+            stream_id,
+            sn,
+            Packet_Type.STREAM_RST_ACK,
+            b"RA" + os.urandom(4),
         )
 
         session = self.sessions.get(session_id)
@@ -1113,7 +1331,9 @@ class MasterDnsVPNServer(PacketQueueMixin):
         if ack_ptype is None:
             return
 
-        await self._enqueue_packet(session_id, 0, stream_id, sn, ack_ptype, b"")
+        await self._enqueue_packet(
+            session_id, 0, stream_id, sn, ack_ptype, b"RA" + os.urandom(4)
+        )
 
         session = self.sessions.get(session_id)
         if not session:
@@ -1539,7 +1759,13 @@ class MasterDnsVPNServer(PacketQueueMixin):
             compression_type=response_compression_type,
         )
 
-    async def _process_socks5_target(self, session_id, stream_id, target_payload):
+    async def _process_socks5_target(
+        self,
+        session_id,
+        stream_id,
+        target_payload,
+        response_fragment_id: int | None = None,
+    ):
         session = self.sessions.get(session_id)
         if not session:
             return
@@ -1696,19 +1922,44 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_data["arq_obj"] = arq
             stream_data["status"] = "CONNECTED"
 
-            stream_data["last_socks_syn_ack"] = time.monotonic()
-            await self._enqueue_packet(
-                session_id, 2, stream_id, 0, Packet_Type.SOCKS5_SYN_ACK, b""
+            await self._queue_and_cache_response(
+                session_id,
+                stream_id,
+                stream_data,
+                "socks",
+                packet_type=Packet_Type.SOCKS5_SYN_ACK,
+                payload=b"SCAC:" + os.urandom(4),
+                priority=2,
+                sequence_num=0,
             )
+            if response_fragment_id is not None:
+                self._cache_response(
+                    stream_data,
+                    ("socks_frag", int(response_fragment_id) & 0xFF),
+                    packet_type=Packet_Type.SOCKS5_SYN_ACK,
+                    payload=stream_data["syn_responses"]["socks"].get("payload", b""),
+                    priority=2,
+                    sequence_num=0,
+                )
 
         except Exception as e:
             err_packet = self._map_socks5_exception_to_packet(e)
-            await self._send_socks5_error_packet(session_id, stream_id, err_packet)
+            await self._send_socks5_error_packet(
+                session_id,
+                stream_id,
+                err_packet,
+                stream_data=stream_data,
+                fragment_id=response_fragment_id,
+            )
+
             self.logger.debug(
                 f"<red>SOCKS5 target connection failed for stream {stream_id}: {e}</red>"
             )
             await self.close_stream(
-                session_id, stream_id, reason=f"SOCKS target unreachable: {e}"
+                session_id,
+                stream_id,
+                reason=f"SOCKS target unreachable: {e}",
+                abortive=True,
             )
 
     async def _send_parser_response(self, builder, data, addr=None):
@@ -2150,6 +2401,9 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_data.get("track_types", set()).clear()
             stream_data.get("track_seq_packets", set()).clear()
             stream_data.get("track_fragment_packets", set()).clear()
+            stream_data.get("socks_chunks", {}).clear()
+            stream_data.get("syn_responses", {}).clear()
+            stream_data["socks_expected_frags"] = None
             stream_data["priority_counts"].clear()
             stream_data["status"] = "TIME_WAIT"
             stream_data["close_time"] = time.monotonic()
@@ -2261,11 +2515,17 @@ class MasterDnsVPNServer(PacketQueueMixin):
         session_streams = session["streams"]
 
         if stream_id in session_streams:
-            existing = session_streams.get(stream_id, {})
-            if existing.get("status") == "CONNECTED" and existing.get("arq_obj"):
-                await self._enqueue_packet(
-                    session_id, 2, stream_id, syn_sn, Packet_Type.STREAM_SYN_ACK, b""
-                )
+            existing = session_streams.get(stream_id)
+            if not existing:
+                return
+
+            await self._enqueue_cached_response(
+                session_id,
+                stream_id,
+                existing,
+                "stream",
+                sequence_num=syn_sn,
+            )
             return
 
         now = time.monotonic()
@@ -2284,7 +2544,6 @@ class MasterDnsVPNServer(PacketQueueMixin):
             "track_resend": set(),
             "track_types": set(),
             "socks_chunks": {},
-            "last_socks_syn_ack": 0.0,
         }
 
         session_streams[stream_id] = stream_data
@@ -2320,8 +2579,15 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_data["status"] = "CONNECTED"
 
             syn_data = b"SYA:" + os.urandom(4)
-            await self._enqueue_packet(
-                session_id, 2, stream_id, syn_sn, Packet_Type.STREAM_SYN_ACK, syn_data
+            await self._queue_and_cache_response(
+                session_id,
+                stream_id,
+                stream_data,
+                "stream",
+                packet_type=Packet_Type.STREAM_SYN_ACK,
+                payload=syn_data,
+                priority=2,
+                sequence_num=syn_sn,
             )
             self.logger.debug(
                 f"<green>Stream <cyan>{stream_id}</cyan> connected to Forward Target: <blue>{self.forward_ip}:{self.forward_port}</blue> for Session <cyan>{session_id}</cyan></green>"

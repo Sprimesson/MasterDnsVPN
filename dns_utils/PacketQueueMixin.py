@@ -24,7 +24,6 @@ class PacketQueueMixin:
     _SYN_TRACK_TYPES = {
         Packet_Type.STREAM_SYN,
         Packet_Type.STREAM_SYN_ACK,
-        Packet_Type.SOCKS5_SYN_ACK,
     }
     # These control packets should exist at most once per queue owner until popped.
     _SINGLE_INSTANCE_QUEUE_TYPES = {
@@ -34,7 +33,6 @@ class PacketQueueMixin:
         Packet_Type.STREAM_FIN_ACK,
         Packet_Type.STREAM_SYN,
         Packet_Type.STREAM_SYN_ACK,
-        Packet_Type.SOCKS5_SYN_ACK,
     }
     # These packets may appear multiple times over a stream lifetime, but only one
     # queued copy per (packet_type, sequence_num) is useful at a time.
@@ -66,10 +64,11 @@ class PacketQueueMixin:
         Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE,
         Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK,
     }
-    # SOCKS5_SYN can be fragmented; dedupe only exact duplicate fragments, not all
-    # packets that share the same sequence number.
+    # Fragment-aware / payload-keyed packets: keep exact duplicates out of the queue
+    # without collapsing distinct fragments or per-fragment ACK payloads together.
     _FRAGMENT_KEYED_QUEUE_TYPES = {
         Packet_Type.SOCKS5_SYN,
+        Packet_Type.SOCKS5_SYN_ACK,
     }
     # These packet types are never meant to live in tx queues directly.
     _DROP_QUEUE_TYPES = {
@@ -382,7 +381,7 @@ class PacketQueueMixin:
             track_types.add(ptype)
             if ptype == Packet_Type.STREAM_FIN:
                 track_fin.add(ptype)
-            elif ptype in (Packet_Type.STREAM_SYN_ACK, Packet_Type.SOCKS5_SYN_ACK):
+            elif ptype == Packet_Type.STREAM_SYN_ACK:
                 track_syn_ack.add(ptype)
             return True
         if ptype == Packet_Type.STREAM_DATA_ACK:

@@ -18,24 +18,26 @@ import (
 )
 
 type ClientConfig struct {
-	ConfigDir            string            `toml:"-"`
-	ConfigPath           string            `toml:"-"`
-	ProtocolType         string            `toml:"PROTOCOL_TYPE"`
-	Domains              []string          `toml:"DOMAINS"`
-	DataEncryptionMethod int               `toml:"DATA_ENCRYPTION_METHOD"`
-	EncryptionKey        string            `toml:"ENCRYPTION_KEY"`
-	LogLevel             string            `toml:"LOG_LEVEL"`
-	Resolvers            []ResolverAddress `toml:"-"`
-	ResolverMap          map[string]int    `toml:"-"`
+	ConfigDir                 string            `toml:"-"`
+	ConfigPath                string            `toml:"-"`
+	ProtocolType              string            `toml:"PROTOCOL_TYPE"`
+	Domains                   []string          `toml:"DOMAINS"`
+	ResolverBalancingStrategy int               `toml:"RESOLVER_BALANCING_STRATEGY"`
+	DataEncryptionMethod      int               `toml:"DATA_ENCRYPTION_METHOD"`
+	EncryptionKey             string            `toml:"ENCRYPTION_KEY"`
+	LogLevel                  string            `toml:"LOG_LEVEL"`
+	Resolvers                 []ResolverAddress `toml:"-"`
+	ResolverMap               map[string]int    `toml:"-"`
 }
 
 func defaultClientConfig() ClientConfig {
 	return ClientConfig{
-		ProtocolType:         "SOCKS5",
-		Domains:              nil,
-		DataEncryptionMethod: 1,
-		EncryptionKey:        "",
-		LogLevel:             "INFO",
+		ProtocolType:              "SOCKS5",
+		Domains:                   nil,
+		ResolverBalancingStrategy: 0,
+		DataEncryptionMethod:      1,
+		EncryptionKey:             "",
+		LogLevel:                  "INFO",
 	}
 }
 
@@ -72,6 +74,9 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 
 	if cfg.DataEncryptionMethod < 0 || cfg.DataEncryptionMethod > 5 {
 		return cfg, fmt.Errorf("invalid DATA_ENCRYPTION_METHOD: %d", cfg.DataEncryptionMethod)
+	}
+	if cfg.ResolverBalancingStrategy < 0 || cfg.ResolverBalancingStrategy > 4 {
+		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)
 	}
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)

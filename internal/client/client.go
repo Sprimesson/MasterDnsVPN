@@ -18,9 +18,10 @@ import (
 )
 
 type Client struct {
-	cfg   config.ClientConfig
-	log   *logger.Logger
-	codec *security.Codec
+	cfg      config.ClientConfig
+	log      *logger.Logger
+	codec    *security.Codec
+	balancer *Balancer
 
 	connections      []Connection
 	connectionsByKey map[string]int
@@ -62,6 +63,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		cfg:              cfg,
 		log:              log,
 		codec:            codec,
+		balancer:         NewBalancer(cfg.ResolverBalancingStrategy),
 		connectionsByKey: make(map[string]int, len(cfg.Domains)*len(cfg.Resolvers)),
 	}
 	c.ResetRuntimeState(true)
@@ -78,6 +80,10 @@ func (c *Client) Logger() *logger.Logger {
 
 func (c *Client) Codec() *security.Codec {
 	return c.codec
+}
+
+func (c *Client) Balancer() *Balancer {
+	return c.balancer
 }
 
 func (c *Client) Connections() []Connection {
@@ -121,12 +127,49 @@ func (c *Client) BuildConnectionMap() {
 				ResolverPort:  resolver.Port,
 				ResolverLabel: label,
 				Key:           key,
+				IsValid:       true,
 			})
 		}
 	}
 
 	c.connections = connections
 	c.connectionsByKey = indexByKey
+	c.rebuildBalancer()
+}
+
+func (c *Client) GetConnectionByKey(serverKey string) (Connection, bool) {
+	idx, ok := c.connectionsByKey[strings.TrimSpace(serverKey)]
+	if !ok || idx < 0 || idx >= len(c.connections) {
+		return Connection{}, false
+	}
+	return c.connections[idx], true
+}
+
+func (c *Client) SetConnectionValidity(serverKey string, valid bool) bool {
+	idx, ok := c.connectionsByKey[strings.TrimSpace(serverKey)]
+	if !ok || idx < 0 || idx >= len(c.connections) {
+		return false
+	}
+
+	c.connections[idx].IsValid = valid
+	c.balancer.RefreshValidConnections()
+	return true
+}
+
+func (c *Client) GetBestConnection() (Connection, bool) {
+	return c.balancer.GetBestConnection()
+}
+
+func (c *Client) GetUniqueConnections(requiredCount int) []Connection {
+	return c.balancer.GetUniqueConnections(requiredCount)
+}
+
+func (c *Client) rebuildBalancer() {
+	ptrs := make([]*Connection, 0, len(c.connections))
+	for idx := range c.connections {
+		ptrs = append(ptrs, &c.connections[idx])
+	}
+	c.balancer.SetConnections(ptrs)
 }
 
 func formatResolverEndpoint(resolver string, port int) string {

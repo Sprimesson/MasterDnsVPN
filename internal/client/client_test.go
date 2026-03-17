@@ -37,8 +37,14 @@ func TestBuildConnectionMap(t *testing.T) {
 	if first.Domain == "" || first.Resolver == "" || first.Key == "" {
 		t.Fatalf("connection fields should be populated: %+v", first)
 	}
+	if !first.IsValid {
+		t.Fatalf("connections should start valid")
+	}
 	if first.Resolver == "2001:4860:4860::8888" && first.ResolverLabel != "[2001:4860:4860::8888]:5353" {
 		t.Fatalf("unexpected ipv6 resolver label: got=%q", first.ResolverLabel)
+	}
+	if c.Balancer().ValidCount() != 4 {
+		t.Fatalf("unexpected valid connection count: got=%d want=%d", c.Balancer().ValidCount(), 4)
 	}
 }
 

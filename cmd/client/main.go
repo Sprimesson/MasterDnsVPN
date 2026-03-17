@@ -30,6 +30,10 @@ func main() {
 		cfg.DataEncryptionMethod,
 	)
 	log.Infof(
+		"[*] <green>Resolver Balancing Strategy</green>: <cyan>%d</cyan>",
+		cfg.ResolverBalancingStrategy,
+	)
+	log.Infof(
 		"[*] <green>Configured Domains</green>: <magenta>%d</magenta>",
 		len(cfg.Domains),
 	)
@@ -40,6 +44,10 @@ func main() {
 	log.Infof(
 		"[*] <green>Connection Catalog</green>: <magenta>%d</magenta> domain-resolver pairs",
 		len(app.Connections()),
+	)
+	log.Infof(
+		"[*] <green>Active Connections</green>: <magenta>%d</magenta>",
+		app.Balancer().ValidCount(),
 	)
 	log.Infof("[*] <green>Client Bootstrap Ready</green>")
 }

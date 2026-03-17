@@ -13,6 +13,10 @@ PROTOCOL_TYPE = "SOCKS5"
 # Must match server DOMAIN values.
 DOMAINS = ["v.domain.com"]
 
+# Resolver balancing strategy:
+# 0=Round Robin (default), 1=Random, 2=Round Robin, 3=Least Loss, 4=Lowest Latency
+RESOLVER_BALANCING_STRATEGY = 0
+
 # Encryption method:
 # 0=None, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM
 # Must match server DATA_ENCRYPTION_METHOD.

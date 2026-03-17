@@ -22,6 +22,7 @@ func TestLoadClientConfigNormalizesAndLoadsResolvers(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "socks5"
 DOMAINS = ["V.Domain.com", "v.domain.com."]
+RESOLVER_BALANCING_STRATEGY = 2
 DATA_ENCRYPTION_METHOD = 1
 ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
@@ -46,6 +47,9 @@ ENCRYPTION_KEY = "secret"
 	}
 	if len(cfg.Domains) != 1 || cfg.Domains[0] != "v.domain.com" {
 		t.Fatalf("unexpected domains: %+v", cfg.Domains)
+	}
+	if cfg.ResolverBalancingStrategy != 2 {
+		t.Fatalf("unexpected resolver balancing strategy: got=%d want=%d", cfg.ResolverBalancingStrategy, 2)
 	}
 	if cfg.ResolverMap["8.8.8.8"] != 53 {
 		t.Fatalf("unexpected resolver port for 8.8.8.8: got=%d want=%d", cfg.ResolverMap["8.8.8.8"], 53)
@@ -75,5 +79,29 @@ ENCRYPTION_KEY = "secret"
 
 	if _, err := LoadClientConfig(configPath); err == nil {
 		t.Fatal("LoadClientConfig should reject an invalid PROTOCOL_TYPE")
+	}
+}
+
+func TestLoadClientConfigRejectsInvalidResolverBalancingStrategy(t *testing.T) {
+	dir := t.TempDir()
+
+	configPath := filepath.Join(dir, "client_config.toml")
+	resolversPath := filepath.Join(dir, "client_resolvers.txt")
+
+	if err := os.WriteFile(configPath, []byte(`
+PROTOCOL_TYPE = "SOCKS5"
+DOMAINS = ["v.domain.com"]
+RESOLVER_BALANCING_STRATEGY = 8
+DATA_ENCRYPTION_METHOD = 1
+ENCRYPTION_KEY = "secret"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile config failed: %v", err)
+	}
+	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile resolvers failed: %v", err)
+	}
+
+	if _, err := LoadClientConfig(configPath); err == nil {
+		t.Fatal("LoadClientConfig should reject an invalid RESOLVER_BALANCING_STRATEGY")
 	}
 }

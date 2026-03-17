@@ -9,6 +9,7 @@ package udpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/dnsparser"
 	"masterdnsvpn-go/internal/domainmatcher"
+	"masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
 	"masterdnsvpn-go/internal/vpnproto"
@@ -240,7 +242,7 @@ func (s *Server) handlePacket(packet []byte) []byte {
 		)
 		return s.handleTunnelCandidate(packet, parsed, decision)
 	case domainmatcher.ActionFormatError:
-		response, responseErr := dnsparser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
+		response, responseErr := dnsparser.BuildFormatErrorResponseFromLite(packet, parsed)
 		if responseErr == nil {
 			s.log.Debugf(
 				"[DNS] <yellow>Malformed DNS Question</yellow> id=<cyan>%d</cyan> reason=<magenta>%s</magenta> action=<green>formerr</green>",
@@ -297,11 +299,18 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed dnsparser.LitePacke
 		len(vpnPacket.Payload),
 	)
 
-	response, responseErr := dnsparser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
-	if responseErr != nil {
-		return nil
+	switch vpnPacket.PacketType {
+	case enums.PacketMTUUpReq:
+		return s.handleMTUUpRequest(packet, parsed, decision, vpnPacket)
+	case enums.PacketMTUDownReq:
+		return s.handleMTUDownRequest(packet, parsed, decision, vpnPacket)
+	default:
+		response, responseErr := dnsparser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
+		if responseErr != nil {
+			return nil
+		}
+		return response
 	}
-	return response
 }
 
 func (s *Server) onDrop(addr *net.UDPAddr) {
@@ -325,4 +334,57 @@ func (s *Server) onDrop(addr *net.UDPAddr) {
 		total,
 		addr.String(),
 	)
+}
+
+func (s *Server) handleMTUUpRequest(questionPacket []byte, _ dnsparser.LitePacket, decision domainmatcher.Decision, vpnPacket vpnproto.Packet) []byte {
+	if len(vpnPacket.Payload) < 1+8 {
+		return nil
+	}
+
+	baseEncode := vpnPacket.Payload[0] == 1
+	probeKey := vpnPacket.Payload[1 : 1+8]
+	response, err := dnsparser.BuildVPNResponsePacket(questionPacket, decision.RequestName, vpnproto.Packet{
+		SessionID:  vpnPacket.SessionID,
+		PacketType: enums.PacketMTUUpRes,
+		Payload:    append([]byte(nil), probeKey...),
+	}, baseEncode)
+	if err != nil {
+		return nil
+	}
+	return response
+}
+
+func (s *Server) handleMTUDownRequest(questionPacket []byte, _ dnsparser.LitePacket, decision domainmatcher.Decision, vpnPacket vpnproto.Packet) []byte {
+	if len(vpnPacket.Payload) < 1+4+8 {
+		return nil
+	}
+
+	baseEncode := vpnPacket.Payload[0] == 1
+	downloadSize := int(binary.BigEndian.Uint32(vpnPacket.Payload[1:5]))
+	if downloadSize < 30 || downloadSize > 4096 {
+		return nil
+	}
+
+	key := vpnPacket.Payload[5:13]
+	payload := make([]byte, downloadSize)
+	copy(payload, key)
+	if downloadSize > len(key) {
+		if _, err := rand.Read(payload[len(key):]); err != nil {
+			return nil
+		}
+	}
+
+	response, err := dnsparser.BuildVPNResponsePacket(questionPacket, decision.RequestName, vpnproto.Packet{
+		SessionID:      vpnPacket.SessionID,
+		PacketType:     enums.PacketMTUDownRes,
+		StreamID:       vpnPacket.StreamID,
+		SequenceNum:    vpnPacket.SequenceNum,
+		FragmentID:     vpnPacket.FragmentID,
+		TotalFragments: vpnPacket.TotalFragments,
+		Payload:        payload,
+	}, baseEncode)
+	if err != nil {
+		return nil
+	}
+	return response
 }

@@ -23,8 +23,15 @@ func TestLoadClientConfigNormalizesAndLoadsResolvers(t *testing.T) {
 PROTOCOL_TYPE = "socks5"
 DOMAINS = ["V.Domain.com", "v.domain.com."]
 RESOLVER_BALANCING_STRATEGY = 2
+BASE_ENCODE_DATA = true
 DATA_ENCRYPTION_METHOD = 1
 ENCRYPTION_KEY = "secret"
+MIN_UPLOAD_MTU = 70
+MIN_DOWNLOAD_MTU = 150
+MAX_UPLOAD_MTU = 150
+MAX_DOWNLOAD_MTU = 200
+MTU_TEST_RETRIES = 2
+MTU_TEST_TIMEOUT = 1.5
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -50,6 +57,12 @@ ENCRYPTION_KEY = "secret"
 	}
 	if cfg.ResolverBalancingStrategy != 2 {
 		t.Fatalf("unexpected resolver balancing strategy: got=%d want=%d", cfg.ResolverBalancingStrategy, 2)
+	}
+	if !cfg.BaseEncodeData {
+		t.Fatalf("unexpected base encode flag: got=%v want=%v", cfg.BaseEncodeData, true)
+	}
+	if cfg.MTUTestTimeout != 1.5 {
+		t.Fatalf("unexpected mtu timeout: got=%v want=%v", cfg.MTUTestTimeout, 1.5)
 	}
 	if cfg.ResolverMap["8.8.8.8"] != 53 {
 		t.Fatalf("unexpected resolver port for 8.8.8.8: got=%d want=%d", cfg.ResolverMap["8.8.8.8"], 53)

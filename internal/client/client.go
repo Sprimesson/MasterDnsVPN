@@ -26,19 +26,23 @@ type Client struct {
 	connections      []Connection
 	connectionsByKey map[string]int
 
-	successMTUChecks bool
-	sessionID        uint8
-	sessionCookie    uint8
-	enqueueSeq       uint64
+	successMTUChecks  bool
+	sessionID         uint8
+	sessionCookie     uint8
+	enqueueSeq        uint64
+	syncedUploadMTU   int
+	syncedDownloadMTU int
 }
 
 type Connection struct {
-	Domain        string
-	Resolver      string
-	ResolverPort  int
-	ResolverLabel string
-	Key           string
-	IsValid       bool
+	Domain           string
+	Resolver         string
+	ResolverPort     int
+	ResolverLabel    string
+	Key              string
+	IsValid          bool
+	UploadMTUBytes   int
+	DownloadMTUBytes int
 }
 
 func Bootstrap(configPath string) (*Client, error) {
@@ -88,6 +92,14 @@ func (c *Client) Balancer() *Balancer {
 
 func (c *Client) Connections() []Connection {
 	return c.connections
+}
+
+func (c *Client) SyncedUploadMTU() int {
+	return c.syncedUploadMTU
+}
+
+func (c *Client) SyncedDownloadMTU() int {
+	return c.syncedDownloadMTU
 }
 
 func (c *Client) ResetRuntimeState(resetSessionCookie bool) {

@@ -49,5 +49,16 @@ func main() {
 		"[*] <green>Active Connections</green>: <magenta>%d</magenta>",
 		app.Balancer().ValidCount(),
 	)
+
+	if err := app.RunInitialMTUTests(); err != nil {
+		_, _ = os.Stderr.WriteString(fmt.Sprintf("Initial MTU testing failed: %v\n", err))
+		os.Exit(1)
+	}
+
+	log.Infof(
+		"[*] <green>Initial MTU Testing Completed</green>  |  Synced Upload: <cyan>%d</cyan>  |  Synced Download: <cyan>%d</cyan>",
+		app.SyncedUploadMTU(),
+		app.SyncedDownloadMTU(),
+	)
 	log.Infof("[*] <green>Client Bootstrap Ready</green>")
 }

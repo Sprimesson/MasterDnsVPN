@@ -98,6 +98,18 @@ func ParseFromLabels(labels string, codec *security.Codec) (Packet, error) {
 }
 
 func Parse(data []byte) (Packet, error) {
+	return ParseAtOffset(data, 0)
+}
+
+func ParseAtOffset(data []byte, offset int) (Packet, error) {
+	if offset < 0 || offset >= len(data) {
+		return Packet{}, ErrPacketTooShort
+	}
+	return parseFrom(data, offset)
+}
+
+func parseFrom(data []byte, start int) (Packet, error) {
+	data = data[start:]
 	if len(data) < minHeaderLength {
 		return Packet{}, ErrPacketTooShort
 	}

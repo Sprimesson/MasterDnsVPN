@@ -23,8 +23,16 @@ type ClientConfig struct {
 	ProtocolType              string            `toml:"PROTOCOL_TYPE"`
 	Domains                   []string          `toml:"DOMAINS"`
 	ResolverBalancingStrategy int               `toml:"RESOLVER_BALANCING_STRATEGY"`
+	BaseEncodeData            bool              `toml:"BASE_ENCODE_DATA"`
 	DataEncryptionMethod      int               `toml:"DATA_ENCRYPTION_METHOD"`
 	EncryptionKey             string            `toml:"ENCRYPTION_KEY"`
+	MinUploadMTU              int               `toml:"MIN_UPLOAD_MTU"`
+	MinDownloadMTU            int               `toml:"MIN_DOWNLOAD_MTU"`
+	MaxUploadMTU              int               `toml:"MAX_UPLOAD_MTU"`
+	MaxDownloadMTU            int               `toml:"MAX_DOWNLOAD_MTU"`
+	MTUTestRetries            int               `toml:"MTU_TEST_RETRIES"`
+	MTUTestTimeout            float64           `toml:"MTU_TEST_TIMEOUT"`
+	MTUTestParallelism        int               `toml:"MTU_TEST_PARALLELISM"`
 	LogLevel                  string            `toml:"LOG_LEVEL"`
 	Resolvers                 []ResolverAddress `toml:"-"`
 	ResolverMap               map[string]int    `toml:"-"`
@@ -35,8 +43,16 @@ func defaultClientConfig() ClientConfig {
 		ProtocolType:              "SOCKS5",
 		Domains:                   nil,
 		ResolverBalancingStrategy: 0,
+		BaseEncodeData:            false,
 		DataEncryptionMethod:      1,
 		EncryptionKey:             "",
+		MinUploadMTU:              70,
+		MinDownloadMTU:            150,
+		MaxUploadMTU:              150,
+		MaxDownloadMTU:            200,
+		MTUTestRetries:            2,
+		MTUTestTimeout:            2.0,
+		MTUTestParallelism:        6,
 		LogLevel:                  "INFO",
 	}
 }
@@ -77,6 +93,24 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	}
 	if cfg.ResolverBalancingStrategy < 0 || cfg.ResolverBalancingStrategy > 4 {
 		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)
+	}
+	if cfg.MinUploadMTU < 0 || cfg.MinDownloadMTU < 0 || cfg.MaxUploadMTU < 0 || cfg.MaxDownloadMTU < 0 {
+		return cfg, fmt.Errorf("mtu values cannot be negative")
+	}
+	if cfg.MaxUploadMTU > 0 && cfg.MinUploadMTU > cfg.MaxUploadMTU {
+		return cfg, fmt.Errorf("MIN_UPLOAD_MTU cannot be greater than MAX_UPLOAD_MTU")
+	}
+	if cfg.MaxDownloadMTU > 0 && cfg.MinDownloadMTU > cfg.MaxDownloadMTU {
+		return cfg, fmt.Errorf("MIN_DOWNLOAD_MTU cannot be greater than MAX_DOWNLOAD_MTU")
+	}
+	if cfg.MTUTestRetries < 1 {
+		cfg.MTUTestRetries = 1
+	}
+	if cfg.MTUTestTimeout <= 0 {
+		cfg.MTUTestTimeout = 1.0
+	}
+	if cfg.MTUTestParallelism < 1 {
+		cfg.MTUTestParallelism = 1
 	}
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)

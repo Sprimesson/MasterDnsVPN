@@ -32,6 +32,10 @@ func BuildFormatErrorResponse(request []byte) ([]byte, error) {
 	return buildResponseWithRCode(request, enums.DNSRCodeFormatError)
 }
 
+func BuildFormatErrorResponseFromLite(request []byte, parsed LitePacket) ([]byte, error) {
+	return buildResponseWithRCodeLite(request, parsed, enums.DNSRCodeFormatError)
+}
+
 func BuildRefusedResponse(request []byte) ([]byte, error) {
 	return buildResponseWithRCode(request, enums.DNSRCodeRefused)
 }
@@ -224,7 +228,7 @@ func rawRecordsLen(records [][]byte) int {
 }
 
 func skipQuestions(data []byte, offset int, count int) (int, error) {
-	for i := 0; i < count; i++ {
+	for range count {
 		nextOffset, err := skipName(data, offset)
 		if err != nil {
 			return offset, ErrInvalidQuestion
@@ -239,7 +243,7 @@ func skipQuestions(data []byte, offset int, count int) (int, error) {
 }
 
 func skipResourceRecords(data []byte, offset int, count int) (int, error) {
-	for i := 0; i < count; i++ {
+	for range count {
 		nextOffset, err := skipName(data, offset)
 		if err != nil {
 			return offset, ErrInvalidAnswer
@@ -266,7 +270,7 @@ func extractRawOPTRecords(data []byte, offset int, count int) ([][]byte, int, er
 	}
 
 	records := make([][]byte, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		recordStart := offset
 
 		nextOffset, err := skipName(data, offset)

@@ -44,14 +44,14 @@ func TestBalancerLeastLoss(t *testing.T) {
 	ptrs := []*Connection{&connections[0], &connections[1]}
 	b.SetConnections(ptrs)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		b.ReportSend("a")
 		b.ReportSend("b")
 	}
-	for i := 0; i < 9; i++ {
+	for range 9 {
 		b.ReportSuccess("a", 2*time.Millisecond)
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		b.ReportSuccess("b", 1*time.Millisecond)
 	}
 
@@ -71,7 +71,7 @@ func TestBalancerLowestLatency(t *testing.T) {
 	ptrs := []*Connection{&connections[0], &connections[1]}
 	b.SetConnections(ptrs)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		b.ReportSuccess("a", 8*time.Millisecond)
 		b.ReportSuccess("b", 2*time.Millisecond)
 	}

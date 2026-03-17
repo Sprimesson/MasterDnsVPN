@@ -38,7 +38,7 @@ func main() {
 		len(cfg.Domains),
 	)
 	log.Infof(
-		"[*] <green>Loaded Resolvers</green>: <magenta>%d</magenta> unique IPs",
+		"[*] <green>Loaded Resolvers</green>: <magenta>%d</magenta> resolver endpoints",
 		len(cfg.Resolvers),
 	)
 	log.Infof(

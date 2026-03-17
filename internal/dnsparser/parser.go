@@ -170,7 +170,7 @@ func parseQuestions(data []byte, offset int, count int) ([]Question, int, error)
 	}
 
 	questions := make([]Question, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name, nextOffset, err := parseName(data, offset)
 		if err != nil {
 			return nil, offset, ErrInvalidQuestion
@@ -198,7 +198,7 @@ func parseResourceRecords(data []byte, offset int, count int) ([]ResourceRecord,
 	}
 
 	records := make([]ResourceRecord, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name, nextOffset, err := parseName(data, offset)
 		if err != nil {
 			return nil, offset, ErrInvalidAnswer

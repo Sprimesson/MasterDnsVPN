@@ -64,7 +64,7 @@ func EncodeLowerBase36(data []byte) string {
 		}
 	}
 
-	for i := 0; i < leadingZeros; i++ {
+	for range leadingZeros {
 		encoded = append(encoded, '0')
 	}
 
@@ -184,10 +184,10 @@ func encodeLowerBase36Small(data []byte, leadingZeros int) string {
 	}
 
 	encoded := make([]byte, leadingZeros+n)
-	for i := 0; i < leadingZeros; i++ {
+	for i := range leadingZeros {
 		encoded[i] = '0'
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		encoded[leadingZeros+i] = reversed[n-1-i]
 	}
 	return string(encoded)
@@ -209,7 +209,7 @@ func decodeLowerBase36Small(data []byte, leadingZeros int) ([]byte, error) {
 	}
 
 	decoded := make([]byte, leadingZeros+byteLen)
-	for i := 0; i < byteLen; i++ {
+	for i := range byteLen {
 		decoded[len(decoded)-1-i] = byte(value)
 		value >>= 8
 	}
@@ -232,7 +232,7 @@ func decodeLowerBase36SmallString(data string, leadingZeros int) ([]byte, error)
 	}
 
 	decoded := make([]byte, leadingZeros+byteLen)
-	for i := 0; i < byteLen; i++ {
+	for i := range byteLen {
 		decoded[len(decoded)-1-i] = byte(value)
 		value >>= 8
 	}

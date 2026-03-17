@@ -81,7 +81,7 @@ func (s *Server) Run(ctx context.Context) error {
 	reqCh := make(chan request, s.cfg.MaxConcurrentRequests)
 	var workerWG sync.WaitGroup
 
-	for i := 0; i < s.cfg.DNSRequestWorkers; i++ {
+	for i := range s.cfg.DNSRequestWorkers {
 		workerWG.Add(1)
 		go func(workerID int) {
 			defer workerWG.Done()
@@ -96,7 +96,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	readErrCh := make(chan error, s.cfg.UDPReaders)
 	var readerWG sync.WaitGroup
-	for i := 0; i < s.cfg.UDPReaders; i++ {
+	for i := range s.cfg.UDPReaders {
 		readerWG.Add(1)
 		go func(readerID int) {
 			defer readerWG.Done()

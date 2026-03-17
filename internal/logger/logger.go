@@ -81,7 +81,10 @@ func (l *Logger) logf(level int, levelName string, format string, args ...any) {
 	if l == nil || level < l.level {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
+	msg := format
+	if len(args) != 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
 	appName := "[" + l.name + "]"
 	levelText := "[" + levelName + "]"
 

@@ -61,3 +61,35 @@ func TestLoadClientResolversRejectsHugeCIDR(t *testing.T) {
 		t.Fatal("LoadClientResolvers should reject very large CIDR ranges")
 	}
 }
+
+func TestLoadClientResolversPreservesSameIPWithDifferentPorts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "client_resolvers.txt")
+
+	content := `
+8.8.8.8:53
+8.8.8.8:5353
+8.8.8.8:53
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	resolvers, resolverMap, err := LoadClientResolvers(path)
+	if err != nil {
+		t.Fatalf("LoadClientResolvers returned error: %v", err)
+	}
+
+	if len(resolvers) != 2 {
+		t.Fatalf("unexpected resolver count: got=%d want=%d", len(resolvers), 2)
+	}
+	if resolvers[0].IP != "8.8.8.8" || resolvers[1].IP != "8.8.8.8" {
+		t.Fatalf("unexpected resolver IPs: %+v", resolvers)
+	}
+	if !(resolvers[0].Port == 53 && resolvers[1].Port == 5353) {
+		t.Fatalf("unexpected resolver ports: %+v", resolvers)
+	}
+	if resolverMap["8.8.8.8"] != 53 {
+		t.Fatalf("unexpected resolver map port: got=%d want=%d", resolverMap["8.8.8.8"], 53)
+	}
+}

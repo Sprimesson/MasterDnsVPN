@@ -26,11 +26,8 @@ type Balancer struct {
 	rrCounter atomic.Uint64
 	rngState  atomic.Uint64
 
-	mu          sync.RWMutex
-	connections []*Connection
-	valid       []int
-	indexByKey  map[string]int
-	stats       []connectionStats
+	mu       sync.Mutex
+	snapshot atomic.Pointer[balancerSnapshot]
 }
 
 type connectionStats struct {
@@ -40,11 +37,15 @@ type connectionStats struct {
 	rttCount     atomic.Uint64
 }
 
+type balancerSnapshot struct {
+	connections []*Connection
+	valid       []int
+	indexByKey  map[string]int
+	statsByKey  map[string]*connectionStats
+}
+
 func NewBalancer(strategy int) *Balancer {
-	b := &Balancer{
-		strategy:   strategy,
-		indexByKey: make(map[string]int),
-	}
+	b := &Balancer{strategy: strategy}
 	b.rngState.Store(seedRNG())
 	return b
 }
@@ -53,51 +54,81 @@ func (b *Balancer) SetConnections(connections []*Connection) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.connections = connections
-	b.indexByKey = make(map[string]int, len(connections))
-	b.valid = make([]int, 0, len(connections))
-	b.stats = make([]connectionStats, len(connections))
+	indexByKey := make(map[string]int, len(connections))
+	statsByKey := make(map[string]*connectionStats, len(connections))
+	valid := make([]int, 0, len(connections))
 
 	for idx, conn := range connections {
 		if conn == nil {
 			continue
 		}
-		b.indexByKey[conn.Key] = idx
+		indexByKey[conn.Key] = idx
+		statsByKey[conn.Key] = &connectionStats{}
 		if conn.IsValid {
-			b.valid = append(b.valid, idx)
+			valid = append(valid, idx)
 		}
 	}
+
+	b.snapshot.Store(&balancerSnapshot{
+		connections: connections,
+		valid:       valid,
+		indexByKey:  indexByKey,
+		statsByKey:  statsByKey,
+	})
 }
 
 func (b *Balancer) ValidCount() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return len(b.valid)
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return 0
+	}
+	return len(snap.valid)
 }
 
 func (b *Balancer) SetConnectionValidity(key string, valid bool) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	idx, ok := b.indexByKey[key]
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return false
+	}
+
+	idx, ok := snap.indexByKey[key]
 	if !ok {
 		return false
 	}
 
-	conn := b.connections[idx]
+	conn := snap.connections[idx]
 	if conn == nil || conn.IsValid == valid {
 		return ok
 	}
 
 	conn.IsValid = valid
-	b.refreshValidLocked()
+	b.snapshot.Store(&balancerSnapshot{
+		connections: snap.connections,
+		valid:       rebuildValidIndices(snap.connections),
+		indexByKey:  snap.indexByKey,
+		statsByKey:  snap.statsByKey,
+	})
 	return true
 }
 
 func (b *Balancer) RefreshValidConnections() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.refreshValidLocked()
+
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return
+	}
+
+	b.snapshot.Store(&balancerSnapshot{
+		connections: snap.connections,
+		valid:       rebuildValidIndices(snap.connections),
+		indexByKey:  snap.indexByKey,
+		statsByKey:  snap.statsByKey,
+	})
 }
 
 func (b *Balancer) ReportSend(serverKey string) {
@@ -142,65 +173,71 @@ func (b *Balancer) ResetServerStats(serverKey string) {
 }
 
 func (b *Balancer) GetBestConnection() (Connection, bool) {
-	selected := b.GetUniqueConnections(1)
-	if len(selected) == 0 {
+	snap := b.snapshot.Load()
+	if snap == nil || len(snap.valid) == 0 {
 		return Connection{}, false
-	}
-	return selected[0], true
-}
-
-func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
-	valid := b.snapshotValid()
-	count := normalizeRequiredCount(len(valid), requiredCount, 1)
-	if count == 0 {
-		return nil
 	}
 
 	switch b.strategy {
 	case BalancingRandom:
-		return b.selectRandom(valid, count)
+		idx := snap.valid[b.nextRandom()%uint64(len(snap.valid))]
+		return derefConnection(snap.connections, idx)
 	case BalancingLeastLoss:
-		return b.selectLowestScore(valid, count, b.lossScore)
+		return b.bestScoredConnection(snap, b.lossScore)
 	case BalancingLowestLatency:
-		return b.selectLowestScore(valid, count, b.latencyScore)
+		return b.bestScoredConnection(snap, b.latencyScore)
 	default:
-		return b.selectRoundRobin(valid, count)
+		pos := int(b.rrCounter.Add(1)-1) % len(snap.valid)
+		return derefConnection(snap.connections, snap.valid[pos])
 	}
 }
 
-func (b *Balancer) refreshValidLocked() {
-	valid := make([]int, 0, len(b.connections))
-	for idx, conn := range b.connections {
+func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return nil
+	}
+
+	count := normalizeRequiredCount(len(snap.valid), requiredCount, 1)
+	if count == 0 {
+		return nil
+	}
+	if count == 1 {
+		best, ok := b.GetBestConnection()
+		if !ok {
+			return nil
+		}
+		return []Connection{best}
+	}
+
+	switch b.strategy {
+	case BalancingRandom:
+		return b.selectRandom(snap, count)
+	case BalancingLeastLoss:
+		return b.selectLowestScore(snap, count, b.lossScore)
+	case BalancingLowestLatency:
+		return b.selectLowestScore(snap, count, b.latencyScore)
+	default:
+		return b.selectRoundRobin(snap, count)
+	}
+}
+
+func rebuildValidIndices(connections []*Connection) []int {
+	valid := make([]int, 0, len(connections))
+	for idx, conn := range connections {
 		if conn != nil && conn.IsValid {
 			valid = append(valid, idx)
 		}
 	}
-	b.valid = valid
-}
-
-func (b *Balancer) snapshotValid() []int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	if len(b.valid) == 0 {
-		return nil
-	}
-
-	snapshot := make([]int, len(b.valid))
-	copy(snapshot, b.valid)
-	return snapshot
+	return valid
 }
 
 func (b *Balancer) statsForKey(serverKey string) *connectionStats {
-	b.mu.RLock()
-	idx, ok := b.indexByKey[serverKey]
-	if !ok || idx < 0 || idx >= len(b.stats) {
-		b.mu.RUnlock()
+	snap := b.snapshot.Load()
+	if snap == nil {
 		return nil
 	}
-	stats := &b.stats[idx]
-	b.mu.RUnlock()
-	return stats
+	return snap.statsByKey[serverKey]
 }
 
 func normalizeRequiredCount(validCount, requiredCount, defaultIfInvalid int) int {
@@ -216,37 +253,36 @@ func normalizeRequiredCount(validCount, requiredCount, defaultIfInvalid int) int
 	return requiredCount
 }
 
-func (b *Balancer) selectRoundRobin(valid []int, count int) []Connection {
+func (b *Balancer) selectRoundRobin(snap *balancerSnapshot, count int) []Connection {
 	start := int(b.rrCounter.Add(uint64(count)) - uint64(count))
 	selected := make([]Connection, 0, count)
-	for i := 0; i < count; i++ {
-		selected = append(selected, b.connectionAt(valid[(start+i)%len(valid)]))
+	for i := range count {
+		conn, ok := derefConnection(snap.connections, snap.valid[(start+i)%len(snap.valid)])
+		if ok {
+			selected = append(selected, conn)
+		}
 	}
 	return selected
 }
 
-func (b *Balancer) selectRandom(valid []int, count int) []Connection {
-	order := make([]int, len(valid))
-	copy(order, valid)
+func (b *Balancer) selectRandom(snap *balancerSnapshot, count int) []Connection {
+	order := make([]int, len(snap.valid))
+	copy(order, snap.valid)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		j := i + int(b.nextRandom()%uint64(len(order)-i))
 		order[i], order[j] = order[j], order[i]
 	}
 
-	selected := make([]Connection, 0, count)
-	for i := 0; i < count; i++ {
-		selected = append(selected, b.connectionAt(order[i]))
-	}
-	return selected
+	return snapshotConnections(snap.connections, order[:count])
 }
 
-func (b *Balancer) selectLowestScore(valid []int, count int, scorer func(int) float64) []Connection {
+func (b *Balancer) selectLowestScore(snap *balancerSnapshot, count int, scorer func(*balancerSnapshot, int) float64) []Connection {
 	bestIdx := make([]int, 0, count)
 	bestScores := make([]float64, 0, count)
 
-	for _, idx := range valid {
-		score := scorer(idx)
+	for _, idx := range snap.valid {
+		score := scorer(snap, idx)
 		insertPos := len(bestScores)
 
 		for i := 0; i < len(bestScores); i++ {
@@ -274,24 +310,48 @@ func (b *Balancer) selectLowestScore(valid []int, count int, scorer func(int) fl
 		}
 	}
 
-	selected := make([]Connection, 0, len(bestIdx))
-	for _, idx := range bestIdx {
-		selected = append(selected, b.connectionAt(idx))
+	return snapshotConnections(snap.connections, bestIdx)
+}
+
+func snapshotConnections(connections []*Connection, indices []int) []Connection {
+	selected := make([]Connection, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(connections) || connections[idx] == nil {
+			continue
+		}
+		selected = append(selected, *connections[idx])
 	}
 	return selected
 }
 
-func (b *Balancer) connectionAt(idx int) Connection {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if idx < 0 || idx >= len(b.connections) || b.connections[idx] == nil {
-		return Connection{}
+func (b *Balancer) bestScoredConnection(snap *balancerSnapshot, scorer func(*balancerSnapshot, int) float64) (Connection, bool) {
+	bestIndex := -1
+	bestScore := 0.0
+	for _, idx := range snap.valid {
+		score := scorer(snap, idx)
+		if bestIndex == -1 || score < bestScore {
+			bestIndex = idx
+			bestScore = score
+		}
 	}
-	return *b.connections[idx]
+	if bestIndex < 0 {
+		return Connection{}, false
+	}
+	return derefConnection(snap.connections, bestIndex)
 }
 
-func (b *Balancer) lossScore(idx int) float64 {
-	stats := &b.stats[idx]
+func derefConnection(connections []*Connection, idx int) (Connection, bool) {
+	if idx < 0 || idx >= len(connections) || connections[idx] == nil {
+		return Connection{}, false
+	}
+	return *connections[idx], true
+}
+
+func (b *Balancer) lossScore(snap *balancerSnapshot, idx int) float64 {
+	stats := statsByIndex(snap, idx)
+	if stats == nil {
+		return 0.5
+	}
 	sent := stats.sent.Load()
 	if sent < 5 {
 		return 0.5
@@ -308,13 +368,23 @@ func (b *Balancer) lossScore(idx int) float64 {
 	return loss
 }
 
-func (b *Balancer) latencyScore(idx int) float64 {
-	stats := &b.stats[idx]
+func (b *Balancer) latencyScore(snap *balancerSnapshot, idx int) float64 {
+	stats := statsByIndex(snap, idx)
+	if stats == nil {
+		return 999000.0
+	}
 	count := stats.rttCount.Load()
 	if count < 5 {
 		return 999000.0
 	}
 	return float64(stats.rttMicrosSum.Load()) / float64(count)
+}
+
+func statsByIndex(snap *balancerSnapshot, idx int) *connectionStats {
+	if snap == nil || idx < 0 || idx >= len(snap.connections) || snap.connections[idx] == nil {
+		return nil
+	}
+	return snap.statsByKey[snap.connections[idx].Key]
 }
 
 func (b *Balancer) nextRandom() uint64 {

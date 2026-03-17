@@ -106,6 +106,7 @@ func (c *Client) BuildConnectionMap() {
 	if total <= 0 {
 		c.connections = nil
 		c.connectionsByKey = make(map[string]int)
+		c.balancer.SetConnections(nil)
 		return
 	}
 
@@ -146,14 +147,7 @@ func (c *Client) GetConnectionByKey(serverKey string) (Connection, bool) {
 }
 
 func (c *Client) SetConnectionValidity(serverKey string, valid bool) bool {
-	idx, ok := c.connectionsByKey[strings.TrimSpace(serverKey)]
-	if !ok || idx < 0 || idx >= len(c.connections) {
-		return false
-	}
-
-	c.connections[idx].IsValid = valid
-	c.balancer.RefreshValidConnections()
-	return true
+	return c.balancer.SetConnectionValidity(strings.TrimSpace(serverKey), valid)
 }
 
 func (c *Client) GetBestConnection() (Connection, bool) {

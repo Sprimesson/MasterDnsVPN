@@ -9,10 +9,10 @@ package udpserver
 
 import (
 	"testing"
+	"time"
 
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
-	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -86,11 +86,16 @@ func TestHandlePingRequestServesQueuedOutboundPacket(t *testing.T) {
 		t.Fatal("expected queued packet")
 	}
 
-	response := srv.handlePingRequest(
+	ok := srv.handlePingRequest(VpnProto.Packet{SessionID: record.ID}, record)
+	if !ok {
+		t.Fatal("expected ping handler to accept session packet")
+	}
+	response := srv.serveQueuedOrPong(
 		buildServerTestQuery(0x3003, "vpn.a.com", Enums.DNS_RECORD_TYPE_TXT),
-		domainMatcher.Decision{RequestName: "vpn.a.com"},
-		VpnProto.Packet{SessionID: record.ID},
+		"vpn.a.com",
 		record,
+		record.ID,
+		time.Now(),
 	)
 
 	packet, err := DnsParser.ExtractVPNResponse(response, false)

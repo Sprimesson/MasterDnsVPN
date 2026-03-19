@@ -13,6 +13,7 @@ import (
 	"time"
 
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/streamutil"
 )
 
 type streamStateRecord struct {
@@ -93,11 +94,11 @@ func (s *streamStateStore) AttachUpstream(sessionID uint8, streamID uint16, host
 
 	record := s.lookupLocked(sessionID, streamID)
 	if record == nil {
-		safeCloseConn(conn)
+		streamutil.SafeClose(conn)
 		return nil, false
 	}
 	if record.UpstreamConn != nil && record.UpstreamConn != conn {
-		safeCloseConn(conn)
+		streamutil.SafeClose(conn)
 		return nil, false
 	}
 	record.TargetHost = host
@@ -133,7 +134,7 @@ func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, seque
 	record.LastSequence = sequenceNum
 	record.RemoteFinSeq = sequenceNum
 	record.RemoteFinSet = true
-	closeWriteConn(record.UpstreamConn)
+	streamutil.CloseWrite(record.UpstreamConn)
 	switch record.State {
 	case Enums.STREAM_STATE_HALF_CLOSED_LOCAL:
 		record.State = Enums.STREAM_STATE_DRAINING
@@ -153,7 +154,7 @@ func (s *streamStateStore) ClassifyInboundData(sessionID uint8, streamID uint16,
 	}
 	record.LastActivityAt = now
 	record.LastSequence = sequenceNum
-	if record.InboundDataSet && sequenceSeenOrOlder(record.InboundDataSeq, sequenceNum) {
+	if record.InboundDataSet && streamutil.SequenceSeenOrOlder(record.InboundDataSeq, sequenceNum) {
 		return cloneStreamStateRecord(record), true, false
 	}
 	record.InboundDataSeq = sequenceNum
@@ -224,7 +225,7 @@ func (s *streamStateStore) MarkReset(sessionID uint8, streamID uint16, sequenceN
 	if record == nil {
 		return false
 	}
-	safeCloseConn(record.UpstreamConn)
+	streamutil.SafeClose(record.UpstreamConn)
 	record.UpstreamConn = nil
 	record.Connected = false
 	record.LastActivityAt = now
@@ -255,7 +256,7 @@ func (s *streamStateStore) RemoveSession(sessionID uint8) {
 	s.mu.Unlock()
 	for _, record := range streams {
 		if record != nil {
-			safeCloseConn(record.UpstreamConn)
+			streamutil.SafeClose(record.UpstreamConn)
 		}
 	}
 }
@@ -274,30 +275,4 @@ func cloneStreamStateRecord(record *streamStateRecord) *streamStateRecord {
 	}
 	cloned := *record
 	return &cloned
-}
-
-func safeCloseConn(conn net.Conn) {
-	if conn == nil {
-		return
-	}
-	_ = conn.Close()
-}
-
-func closeWriteConn(conn net.Conn) {
-	if conn == nil {
-		return
-	}
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if tcpConn, ok := conn.(closeWriter); ok {
-		_ = tcpConn.CloseWrite()
-		return
-	}
-	_ = conn.Close()
-}
-
-func sequenceSeenOrOlder(last uint16, current uint16) bool {
-	diff := uint16(current - last)
-	return diff == 0 || diff >= 0x8000
 }

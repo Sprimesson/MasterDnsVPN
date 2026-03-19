@@ -14,6 +14,7 @@ import (
 	"time"
 
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/streamutil"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -158,7 +159,7 @@ func (c *Client) handleInboundStreamPacket(packet VpnProto.Packet, timeout time.
 	switch packet.PacketType {
 	case Enums.PACKET_STREAM_DATA:
 		stream.mu.Lock()
-		if stream.InboundDataSet && sequenceSeenOrOlder(stream.InboundDataSeq, packet.SequenceNum) {
+		if stream.InboundDataSet && streamutil.SequenceSeenOrOlder(stream.InboundDataSeq, packet.SequenceNum) {
 			stream.mu.Unlock()
 			return c.exchangeStreamControlPacket(Enums.PACKET_STREAM_DATA_ACK, stream.ID, packet.SequenceNum, nil, timeout)
 		}
@@ -185,7 +186,7 @@ func (c *Client) handleInboundStreamPacket(packet VpnProto.Packet, timeout time.
 		stream.RemoteFinSet = true
 		stream.RemoteFinRecv = true
 		stream.mu.Unlock()
-		closeWriteConn(stream.Conn)
+		streamutil.CloseWrite(stream.Conn)
 		if streamFinished(stream) {
 			c.deleteStream(stream.ID)
 		}
@@ -531,25 +532,6 @@ func streamFinished(stream *clientStream) bool {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	return stream.Closed || (stream.LocalFinSent && stream.RemoteFinRecv)
-}
-
-func closeWriteConn(conn net.Conn) {
-	if conn == nil {
-		return
-	}
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if writer, ok := conn.(closeWriter); ok {
-		_ = writer.CloseWrite()
-		return
-	}
-	_ = conn.Close()
-}
-
-func sequenceSeenOrOlder(last uint16, current uint16) bool {
-	diff := uint16(current - last)
-	return diff == 0 || diff >= 0x8000
 }
 
 func matchesClientStreamAck(sentType uint8, ackType uint8) bool {

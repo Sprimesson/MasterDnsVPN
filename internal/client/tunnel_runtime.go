@@ -310,12 +310,7 @@ func (c *Client) buildTunnelTXTQuery(domain string, options VpnProto.BuildOption
 	if err != nil {
 		return nil, err
 	}
-
-	name, err := DnsParser.BuildTunnelQuestionName(domain, encoded)
-	if err != nil {
-		return nil, err
-	}
-	return DnsParser.BuildTXTQuestionPacket(name, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+	return buildTunnelTXTQuestion(domain, encoded)
 }
 
 type udpQueryTransport struct {

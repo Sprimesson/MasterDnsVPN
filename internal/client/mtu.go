@@ -343,7 +343,7 @@ func (c *Client) sendDownloadMTUProbe(conn *Connection, probeTransport *udpQuery
 }
 
 func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
-	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
+	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
 		SessionID:      255,
 		PacketType:     packetType,
 		StreamID:       1,
@@ -351,16 +351,7 @@ func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []b
 		FragmentID:     0,
 		TotalFragments: 1,
 		Payload:        payload,
-	}, c.codec)
-	if err != nil {
-		return nil, err
-	}
-
-	name, err := DnsParser.BuildTunnelQuestionName(domain, encoded)
-	if err != nil {
-		return nil, err
-	}
-	return DnsParser.BuildTXTQuestionPacket(name, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+	})
 }
 
 func (c *Client) maxUploadMTUPayload(domain string) int {

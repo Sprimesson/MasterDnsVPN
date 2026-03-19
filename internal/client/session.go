@@ -111,18 +111,9 @@ func (c *Client) buildSessionQuery(domain string, packetType uint8, payload []by
 }
 
 func (c *Client) buildTunnelQuery(domain string, sessionID uint8, packetType uint8, payload []byte) ([]byte, error) {
-	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
+	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
 		SessionID:  sessionID,
 		PacketType: packetType,
 		Payload:    payload,
-	}, c.codec)
-	if err != nil {
-		return nil, err
-	}
-
-	name, err := DnsParser.BuildTunnelQuestionName(domain, encoded)
-	if err != nil {
-		return nil, err
-	}
-	return DnsParser.BuildTXTQuestionPacket(name, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+	})
 }

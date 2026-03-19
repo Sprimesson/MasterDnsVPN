@@ -28,6 +28,7 @@ import (
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
 	SocksProto "masterdnsvpn-go/internal/socksproto"
+	"masterdnsvpn-go/internal/streamutil"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -736,7 +737,7 @@ func (s *Server) handleStreamSynRequest(questionPacket []byte, decision domainma
 		}
 		record, ok := s.streams.AttachUpstream(vpnPacket.SessionID, vpnPacket.StreamID, s.cfg.ForwardIP, uint16(s.cfg.ForwardPort), upstreamConn, now)
 		if !ok || record == nil {
-			safeCloseConn(upstreamConn)
+			streamutil.SafeClose(upstreamConn)
 			return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 				PacketType:  Enums.PACKET_STREAM_RST,
 				StreamID:    vpnPacket.StreamID,
@@ -825,7 +826,7 @@ func (s *Server) handleSOCKS5SynRequest(questionPacket []byte, decision domainma
 
 	record, ok := s.streams.AttachUpstream(vpnPacket.SessionID, vpnPacket.StreamID, target.Host, target.Port, upstreamConn, now)
 	if !ok || record == nil {
-		safeCloseConn(upstreamConn)
+		streamutil.SafeClose(upstreamConn)
 		return s.buildSessionVPNResponse(questionPacket, decision.RequestName, sessionRecord, VpnProto.Packet{
 			PacketType:  Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE,
 			StreamID:    vpnPacket.StreamID,

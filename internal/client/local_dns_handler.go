@@ -79,8 +79,8 @@ func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest
 	}
 
 	dispatch := &dnsDispatchRequest{
-		CacheKey: append([]byte(nil), cacheKey...),
-		Query:    append([]byte(nil), query...),
+		CacheKey: cacheKey,
+		Query:    query,
 		Domain:   metadata.Domain,
 		QType:    metadata.QType,
 		QClass:   metadata.QClass,

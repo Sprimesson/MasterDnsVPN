@@ -1157,10 +1157,10 @@ func TestClientStreamTXAckRemovesOutOfOrderInflightPacket(t *testing.T) {
 		}
 	}
 
-	if packet, waitFor, stop := nextClientStreamTX(stream); stop || packet == nil || waitFor != 0 {
+	if packet, waitFor, stop := nextClientStreamTX(stream, 4); stop || packet == nil || waitFor != 0 {
 		t.Fatalf("expected first inflight packet, stop=%v packet=%v wait=%v", stop, packet, waitFor)
 	}
-	if packet, waitFor, stop := nextClientStreamTX(stream); stop || packet == nil || waitFor != 0 {
+	if packet, waitFor, stop := nextClientStreamTX(stream, 4); stop || packet == nil || waitFor != 0 {
 		t.Fatalf("expected second inflight packet, stop=%v packet=%v wait=%v", stop, packet, waitFor)
 	}
 

@@ -36,6 +36,7 @@ type ServerConfig struct {
 	SessionCleanupIntervalSecs        float64  `toml:"SESSION_CLEANUP_INTERVAL_SECONDS"`
 	ClosedSessionRetentionSecs        float64  `toml:"CLOSED_SESSION_RETENTION_SECONDS"`
 	MaxPacketsPerBatch                int      `toml:"MAX_PACKETS_PER_BATCH"`
+	StreamOutboundWindow              int      `toml:"STREAM_OUTBOUND_WINDOW"`
 	DNSUpstreamServers                []string `toml:"DNS_UPSTREAM_SERVERS"`
 	DNSUpstreamTimeoutSecs            float64  `toml:"DNS_UPSTREAM_TIMEOUT"`
 	SOCKSConnectTimeoutSecs           float64  `toml:"SOCKS_CONNECT_TIMEOUT"`
@@ -71,6 +72,7 @@ func defaultServerConfig() ServerConfig {
 		SessionCleanupIntervalSecs:        30.0,
 		ClosedSessionRetentionSecs:        600.0,
 		MaxPacketsPerBatch:                20,
+		StreamOutboundWindow:              4,
 		DNSUpstreamServers:                []string{"1.1.1.1:53"},
 		DNSUpstreamTimeoutSecs:            4.0,
 		SOCKSConnectTimeoutSecs:           8.0,
@@ -153,6 +155,12 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 	}
 	if cfg.MaxPacketsPerBatch < 1 {
 		cfg.MaxPacketsPerBatch = 20
+	}
+	if cfg.StreamOutboundWindow < 1 {
+		cfg.StreamOutboundWindow = 4
+	}
+	if cfg.StreamOutboundWindow > 32 {
+		cfg.StreamOutboundWindow = 32
 	}
 	if len(cfg.DNSUpstreamServers) == 0 {
 		cfg.DNSUpstreamServers = []string{"1.1.1.1:53"}

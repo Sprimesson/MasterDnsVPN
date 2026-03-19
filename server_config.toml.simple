@@ -44,6 +44,9 @@ CLOSED_SESSION_RETENTION_SECONDS = 600.0
 # The effective runtime value is also limited by 80% of session download MTU.
 MAX_PACKETS_PER_BATCH = 20
 
+# Maximum in-flight outbound stream packets per session on server side.
+STREAM_OUTBOUND_WINDOW = 4
+
 # Upstream resolvers used for tunneled DNS queries.
 DNS_UPSTREAM_SERVERS = ["1.1.1.1:53"]
 DNS_UPSTREAM_TIMEOUT = 4.0

@@ -20,7 +20,6 @@ import (
 const maxClientStreamFollowUps = 16
 const streamTXInitialRetryDelay = 350 * time.Millisecond
 const streamTXMaxRetryDelay = 2 * time.Second
-const clientStreamTXWindowSize = 4
 
 var ErrClientStreamClosed = errors.New("client stream closed")
 
@@ -31,7 +30,7 @@ func (c *Client) createStream(streamID uint16, conn net.Conn) *clientStream {
 		NextSequence:   2,
 		LastActivityAt: time.Now(),
 		TXQueue:        make([]clientStreamTXPacket, 0, 8),
-		TXInFlight:     make([]clientStreamTXPacket, 0, clientStreamTXWindowSize),
+		TXInFlight:     make([]clientStreamTXPacket, 0, c.effectiveStreamTXWindow()),
 		TXWake:         make(chan struct{}, 1),
 		StopCh:         make(chan struct{}),
 	}
@@ -246,7 +245,7 @@ func (c *Client) runClientStreamTXLoop(stream *clientStream, timeout time.Durati
 	}
 
 	for {
-		packet, waitFor, shouldStop := nextClientStreamTX(stream)
+		packet, waitFor, shouldStop := nextClientStreamTX(stream, c.effectiveStreamTXWindow())
 		if shouldStop {
 			return
 		}
@@ -293,14 +292,17 @@ func (c *Client) runClientStreamTXLoop(stream *clientStream, timeout time.Durati
 	}
 }
 
-func nextClientStreamTX(stream *clientStream) (*clientStreamTXPacket, time.Duration, bool) {
+func nextClientStreamTX(stream *clientStream, windowSize int) (*clientStreamTXPacket, time.Duration, bool) {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.Closed {
 		return nil, 0, true
 	}
+	if windowSize < 1 {
+		windowSize = 1
+	}
 	now := time.Now()
-	for len(stream.TXInFlight) < clientStreamTXWindowSize && len(stream.TXQueue) != 0 {
+	for len(stream.TXInFlight) < windowSize && len(stream.TXQueue) != 0 {
 		packet := stream.TXQueue[0]
 		stream.TXQueue[0] = clientStreamTXPacket{}
 		stream.TXQueue = stream.TXQueue[1:]
@@ -476,4 +478,14 @@ func matchesClientStreamAck(sentType uint8, ackType uint8) bool {
 	default:
 		return false
 	}
+}
+
+func (c *Client) effectiveStreamTXWindow() int {
+	if c == nil || c.streamTXWindow < 1 {
+		return 1
+	}
+	if c.streamTXWindow > 32 {
+		return 32
+	}
+	return c.streamTXWindow
 }

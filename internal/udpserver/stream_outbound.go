@@ -15,13 +15,13 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-const streamOutboundWindowSize = 4
 const streamOutboundInitialRetryDelay = 350 * time.Millisecond
 const streamOutboundMaxRetryDelay = 2 * time.Second
 
 type streamOutboundStore struct {
 	mu       sync.Mutex
 	sessions map[uint8]*streamOutboundSession
+	window   int
 }
 
 type outboundPendingPacket struct {
@@ -35,9 +35,16 @@ type streamOutboundSession struct {
 	pending []outboundPendingPacket
 }
 
-func newStreamOutboundStore() *streamOutboundStore {
+func newStreamOutboundStore(windowSize int) *streamOutboundStore {
+	if windowSize < 1 {
+		windowSize = 1
+	}
+	if windowSize > 32 {
+		windowSize = 32
+	}
 	return &streamOutboundStore{
 		sessions: make(map[uint8]*streamOutboundSession, 32),
+		window:   windowSize,
 	}
 }
 
@@ -52,7 +59,7 @@ func (s *streamOutboundStore) Enqueue(sessionID uint8, packet VpnProto.Packet) {
 	if session == nil {
 		session = &streamOutboundSession{
 			queue:   make([]VpnProto.Packet, 0, 8),
-			pending: make([]outboundPendingPacket, 0, streamOutboundWindowSize),
+			pending: make([]outboundPendingPacket, 0, s.effectiveWindow()),
 		}
 		s.sessions[sessionID] = session
 	}
@@ -71,7 +78,7 @@ func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Pac
 	if session == nil {
 		return VpnProto.Packet{}, false
 	}
-	if len(session.pending) < streamOutboundWindowSize && len(session.queue) != 0 {
+	if len(session.pending) < s.effectiveWindow() && len(session.queue) != 0 {
 		packet := session.queue[0]
 		session.queue[0] = VpnProto.Packet{}
 		session.queue = session.queue[1:]
@@ -199,4 +206,14 @@ func matchesStreamOutboundAck(pendingType uint8, ackType uint8) bool {
 func cloneOutboundPacket(packet VpnProto.Packet) VpnProto.Packet {
 	packet.Payload = append([]byte(nil), packet.Payload...)
 	return packet
+}
+
+func (s *streamOutboundStore) effectiveWindow() int {
+	if s == nil || s.window < 1 {
+		return 1
+	}
+	if s.window > 32 {
+		return 32
+	}
+	return s.window
 }

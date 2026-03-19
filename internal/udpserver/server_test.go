@@ -490,7 +490,7 @@ func TestHandlePacketPingReturnsQueuedStreamPacket(t *testing.T) {
 }
 
 func TestStreamOutboundStoreSupportsWindowAndOutOfOrderAck(t *testing.T) {
-	store := newStreamOutboundStore()
+	store := newStreamOutboundStore(4)
 	now := time.Now()
 
 	store.Enqueue(7, VpnProto.Packet{

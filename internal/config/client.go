@@ -40,6 +40,7 @@ type ClientConfig struct {
 	LocalDNSCacheFlushSec     float64           `toml:"LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS"`
 	ResolverBalancingStrategy int               `toml:"RESOLVER_BALANCING_STRATEGY"`
 	MaxPacketsPerBatch        int               `toml:"MAX_PACKETS_PER_BATCH"`
+	StreamTXWindow            int               `toml:"STREAM_TX_WINDOW"`
 	BaseEncodeData            bool              `toml:"BASE_ENCODE_DATA"`
 	UploadCompressionType     int               `toml:"UPLOAD_COMPRESSION_TYPE"`
 	DownloadCompressionType   int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
@@ -78,6 +79,7 @@ func defaultClientConfig() ClientConfig {
 		LocalDNSCacheFlushSec:     60.0,
 		ResolverBalancingStrategy: 0,
 		MaxPacketsPerBatch:        5,
+		StreamTXWindow:            4,
 		BaseEncodeData:            false,
 		UploadCompressionType:     compression.TypeOff,
 		DownloadCompressionType:   compression.TypeOff,
@@ -166,6 +168,12 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	}
 	if cfg.MaxPacketsPerBatch < 1 {
 		cfg.MaxPacketsPerBatch = 5
+	}
+	if cfg.StreamTXWindow < 1 {
+		cfg.StreamTXWindow = 4
+	}
+	if cfg.StreamTXWindow > 32 {
+		cfg.StreamTXWindow = 32
 	}
 	if cfg.UploadCompressionType < compression.TypeOff || cfg.UploadCompressionType > compression.TypeZLIB {
 		return cfg, fmt.Errorf("invalid UPLOAD_COMPRESSION_TYPE: %d", cfg.UploadCompressionType)

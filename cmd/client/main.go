@@ -98,11 +98,15 @@ func main() {
 				cfg.ListenIP,
 				cfg.ListenPort,
 			)
-		} else {
+		} else if cfg.LocalSOCKS5Enabled {
 			log.Infof(
 				"\U0001F9E6 <green>Local SOCKS5 Listener Addr: <cyan>%s:%d</cyan></green>",
 				cfg.LocalSOCKS5IP,
 				cfg.LocalSOCKS5Port,
+			)
+		} else {
+			log.Infof(
+				"\U0001F9E6 <yellow>Local SOCKS5 Listener Disabled</yellow>",
 			)
 		}
 

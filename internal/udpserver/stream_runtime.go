@@ -17,12 +17,10 @@ import (
 
 const minStreamReadBuffer = 256
 
-func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, conn io.ReadCloser, compressionType uint8, mtu int) {
+func (s *Server) startStreamUpstreamReadLoop(sessionID uint8, streamID uint16, conn io.ReadCloser, compressionType uint8, bufferSize int) {
 	if s == nil || conn == nil {
 		return
 	}
-
-	bufferSize := computeStreamReadBufferSize(mtu)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {

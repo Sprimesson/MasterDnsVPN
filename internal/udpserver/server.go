@@ -724,11 +724,14 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 
 	if !reused && s.log != nil {
 		s.log.Infof(
-			"\U0001F9DD <green>Session Created, ID: <cyan>%d</cyan>, Mode: <cyan>%s</cyan>, Upload Compression: <cyan>%s</cyan>, Download Compression: <cyan>%s</cyan></green>",
+			"\U0001F9DD <green>Session Created, ID: <cyan>%d</cyan>, Mode: <cyan>%s</cyan>, Upload Compression: <cyan>%s</cyan>, Download Compression: <cyan>%s</cyan>, Client Upload MTU: <cyan>%d</cyan>, Client Download MTU: <cyan>%d</cyan>, Max Packed Blocks: <cyan>%d</cyan></green>",
 			record.ID,
 			sessionResponseModeName(record.ResponseMode),
 			compression.TypeName(record.UploadCompression),
 			compression.TypeName(record.DownloadCompression),
+			record.UploadMTU,
+			record.DownloadMTU,
+			record.MaxPackedBlocks,
 		)
 	}
 
@@ -952,7 +955,7 @@ func (s *Server) handlePackedPostSessionBlock(vpnPacket VpnProto.Packet, session
 	}
 }
 
-func (s *Server) processDeferredDNSQuery(sessionID uint8, sequenceNum uint16, downloadCompression uint8, downloadMTU uint16, assembledQuery []byte) {
+func (s *Server) processDeferredDNSQuery(sessionID uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
 	if !s.sessions.HasActive(sessionID) {
 		return
 	}
@@ -960,7 +963,7 @@ func (s *Server) processDeferredDNSQuery(sessionID uint8, sequenceNum uint16, do
 	if len(rawResponse) == 0 {
 		return
 	}
-	fragments := s.fragmentDNSResponsePayload(rawResponse, downloadMTU)
+	fragments := s.fragmentDNSResponsePayload(rawResponse, downloadMTUBytes)
 	if len(fragments) == 0 {
 		return
 	}
@@ -1022,7 +1025,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet, sessionReco
 			})
 			return
 		}
-		s.startStreamUpstreamReadLoop(vpnPacket.SessionID, vpnPacket.StreamID, upstreamConn, sessionRecord.DownloadCompression, int(sessionRecord.DownloadMTU))
+		s.startStreamUpstreamReadLoop(vpnPacket.SessionID, vpnPacket.StreamID, upstreamConn, sessionRecord.DownloadCompression, sessionRecord.StreamReadBufferSize)
 	} else {
 		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, now)
 	}
@@ -1114,7 +1117,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet, sessionReco
 		})
 		return
 	}
-	s.startStreamUpstreamReadLoop(vpnPacket.SessionID, vpnPacket.StreamID, upstreamConn, sessionRecord.DownloadCompression, int(sessionRecord.DownloadMTU))
+	s.startStreamUpstreamReadLoop(vpnPacket.SessionID, vpnPacket.StreamID, upstreamConn, sessionRecord.DownloadCompression, sessionRecord.StreamReadBufferSize)
 
 	if s.log != nil {
 		s.log.Debugf(
@@ -1255,7 +1258,7 @@ func (s *Server) handleDNSQueryRequest(decision domainMatcher.Decision, vpnPacke
 			vpnPacket.SessionID,
 			vpnPacket.SequenceNum,
 			sessionRecord.DownloadCompression,
-			sessionRecord.DownloadMTU,
+			sessionRecord.DownloadMTUBytes,
 			assembledQuery,
 		)
 	}

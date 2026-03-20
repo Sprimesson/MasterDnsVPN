@@ -67,9 +67,10 @@ func TestHandlePacketRespondsToMTUUpProbe(t *testing.T) {
 	}
 
 	srv := New(config.ServerConfig{
-		MaxPacketSize:     65535,
-		Domain:            []string{"a.com"},
-		MinVPNLabelLength: 3,
+		MaxPacketSize:      65535,
+		Domain:             []string{"a.com"},
+		MinVPNLabelLength:  3,
+		MaxPacketsPerBatch: 100,
 	}, nil, codec)
 
 	verifyCode := []byte{0x11, 0x22, 0x33, 0x44}
@@ -106,9 +107,10 @@ func TestHandlePacketRespondsToMTUDownProbe(t *testing.T) {
 	}
 
 	srv := New(config.ServerConfig{
-		MaxPacketSize:     65535,
-		Domain:            []string{"a.com"},
-		MinVPNLabelLength: 3,
+		MaxPacketSize:      65535,
+		Domain:             []string{"a.com"},
+		MinVPNLabelLength:  3,
+		MaxPacketsPerBatch: 100,
 	}, nil, codec)
 
 	verifyCode := []byte{0xAA, 0xBB, 0xCC, 0xDD}
@@ -148,9 +150,10 @@ func TestHandlePacketRespondsToMTUUpProbeBaseEncoded(t *testing.T) {
 	}
 
 	srv := New(config.ServerConfig{
-		MaxPacketSize:     65535,
-		Domain:            []string{"a.com"},
-		MinVPNLabelLength: 3,
+		MaxPacketSize:      65535,
+		Domain:             []string{"a.com"},
+		MinVPNLabelLength:  3,
+		MaxPacketsPerBatch: 100,
 	}, nil, codec)
 
 	verifyCode := []byte{0x10, 0x20, 0x30, 0x40}
@@ -181,9 +184,10 @@ func TestHandlePacketCreatesAndReusesSessionInit(t *testing.T) {
 	}
 
 	srv := New(config.ServerConfig{
-		MaxPacketSize:     65535,
-		Domain:            []string{"a.com"},
-		MinVPNLabelLength: 3,
+		MaxPacketSize:      65535,
+		Domain:             []string{"a.com"},
+		MinVPNLabelLength:  3,
+		MaxPacketsPerBatch: 100,
 	}, nil, codec)
 
 	verifyCode := []byte{0x44, 0x33, 0x22, 0x11}
@@ -230,6 +234,28 @@ func TestHandlePacketCreatesAndReusesSessionInit(t *testing.T) {
 	}
 	if packet1.SessionID != 0 || packet2.SessionID != 0 {
 		t.Fatalf("session accept should stay in pre-session header space: got1=%d got2=%d", packet1.SessionID, packet2.SessionID)
+	}
+
+	snapshot, ok := srv.sessions.Active(packet1.Payload[0])
+	if !ok || snapshot == nil {
+		t.Fatal("expected created session snapshot")
+	}
+	if snapshot.UploadMTU != 150 {
+		t.Fatalf("unexpected upload mtu: got=%d want=%d", snapshot.UploadMTU, 150)
+	}
+	if snapshot.DownloadMTU != 200 {
+		t.Fatalf("unexpected download mtu: got=%d want=%d", snapshot.DownloadMTU, 200)
+	}
+	if snapshot.DownloadMTUBytes != 200 {
+		t.Fatalf("unexpected cached download mtu bytes: got=%d want=%d", snapshot.DownloadMTUBytes, 200)
+	}
+	expectedPacked := arq.ComputeServerPackedControlBlockLimit(200, 100)
+	if snapshot.MaxPackedBlocks != expectedPacked {
+		t.Fatalf("unexpected max packed blocks: got=%d want=%d", snapshot.MaxPackedBlocks, expectedPacked)
+	}
+	expectedBuffer := computeStreamReadBufferSize(200)
+	if snapshot.StreamReadBufferSize != expectedBuffer {
+		t.Fatalf("unexpected cached stream read buffer size: got=%d want=%d", snapshot.StreamReadBufferSize, expectedBuffer)
 	}
 }
 

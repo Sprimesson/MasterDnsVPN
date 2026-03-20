@@ -180,11 +180,11 @@ func (s *Server) removeDNSQueryFragmentsForSession(sessionID uint8) {
 	})
 }
 
-func (s *Server) fragmentDNSResponsePayload(response []byte, mtu uint16) [][]byte {
+func (s *Server) fragmentDNSResponsePayload(response []byte, mtu int) [][]byte {
 	if len(response) == 0 {
 		return nil
 	}
-	limit := int(mtu)
+	limit := mtu
 	if limit < 1 {
 		limit = 256
 	}

@@ -37,9 +37,11 @@ type sessionRecord struct {
 	DownloadCompression  uint8
 	UploadMTU            uint16
 	DownloadMTU          uint16
+	DownloadMTUBytes     int
 	VerifyCode           [4]byte
 	Signature            [sessionInitDataSize]byte
 	MaxPackedBlocks      int
+	StreamReadBufferSize int
 	CreatedAt            time.Time
 	ReuseUntil           time.Time
 	reuseUntilUnixNano   int64
@@ -47,29 +49,33 @@ type sessionRecord struct {
 }
 
 type sessionRuntimeView struct {
-	ID                  uint8
-	Cookie              uint8
-	ResponseMode        uint8
-	ResponseBase64      bool
-	DownloadCompression uint8
-	DownloadMTU         uint16
-	MaxPackedBlocks     int
+	ID                   uint8
+	Cookie               uint8
+	ResponseMode         uint8
+	ResponseBase64       bool
+	DownloadCompression  uint8
+	DownloadMTU          uint16
+	DownloadMTUBytes     int
+	MaxPackedBlocks      int
+	StreamReadBufferSize int
 }
 
 type sessionSnapshot struct {
-	ID                  uint8
-	Cookie              uint8
-	ResponseMode        uint8
-	UploadCompression   uint8
-	DownloadCompression uint8
-	UploadMTU           uint16
-	DownloadMTU         uint16
-	VerifyCode          [4]byte
-	Signature           [sessionInitDataSize]byte
-	MaxPackedBlocks     int
-	CreatedAt           time.Time
-	LastActivityAt      time.Time
-	ReuseUntil          time.Time
+	ID                   uint8
+	Cookie               uint8
+	ResponseMode         uint8
+	UploadCompression    uint8
+	DownloadCompression  uint8
+	UploadMTU            uint16
+	DownloadMTU          uint16
+	DownloadMTUBytes     int
+	VerifyCode           [4]byte
+	Signature            [sessionInitDataSize]byte
+	MaxPackedBlocks      int
+	StreamReadBufferSize int
+	CreatedAt            time.Time
+	LastActivityAt       time.Time
+	ReuseUntil           time.Time
 }
 
 type closedSessionRecord struct {
@@ -161,9 +167,11 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 	record.setLastActivityUnixNano(nowUnixNano)
 	record.UploadCompression = uploadCompressionType
 	record.DownloadCompression = downloadCompressionType
-	record.UploadMTU = clampMTU(binary.BigEndian.Uint16(payload[2:4]))
-	record.DownloadMTU = clampMTU(binary.BigEndian.Uint16(payload[4:6]))
-	record.MaxPackedBlocks = arq.ComputeServerPackedControlBlockLimit(int(record.DownloadMTU), maxPacketsPerBatch)
+	record.applyMTUFromSessionInit(
+		binary.BigEndian.Uint16(payload[2:4]),
+		binary.BigEndian.Uint16(payload[4:6]),
+		maxPacketsPerBatch,
+	)
 	copy(record.VerifyCode[:], payload[6:10])
 	record.Cookie = s.randomCookieLocked()
 
@@ -450,15 +458,28 @@ func nextSessionID(current uint8) uint8 {
 	return current + 1
 }
 
+func (r *sessionRecord) applyMTUFromSessionInit(uploadMTU uint16, downloadMTU uint16, maxPacketsPerBatch int) {
+	if r == nil {
+		return
+	}
+	r.UploadMTU = clampMTU(uploadMTU)
+	r.DownloadMTU = clampMTU(downloadMTU)
+	r.DownloadMTUBytes = int(r.DownloadMTU)
+	r.MaxPackedBlocks = arq.ComputeServerPackedControlBlockLimit(r.DownloadMTUBytes, maxPacketsPerBatch)
+	r.StreamReadBufferSize = computeStreamReadBufferSize(r.DownloadMTUBytes)
+}
+
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
 	return sessionRuntimeView{
-		ID:                  r.ID,
-		Cookie:              r.Cookie,
-		ResponseMode:        r.ResponseMode,
-		ResponseBase64:      r.ResponseMode == mtuProbeModeBase64,
-		DownloadCompression: r.DownloadCompression,
-		DownloadMTU:         r.DownloadMTU,
-		MaxPackedBlocks:     r.MaxPackedBlocks,
+		ID:                   r.ID,
+		Cookie:               r.Cookie,
+		ResponseMode:         r.ResponseMode,
+		ResponseBase64:       r.ResponseMode == mtuProbeModeBase64,
+		DownloadCompression:  r.DownloadCompression,
+		DownloadMTU:          r.DownloadMTU,
+		DownloadMTUBytes:     r.DownloadMTUBytes,
+		MaxPackedBlocks:      r.MaxPackedBlocks,
+		StreamReadBufferSize: r.StreamReadBufferSize,
 	}
 }
 
@@ -470,18 +491,20 @@ func (r *sessionRecord) snapshot() sessionSnapshot {
 	}
 
 	return sessionSnapshot{
-		ID:                  r.ID,
-		Cookie:              r.Cookie,
-		ResponseMode:        r.ResponseMode,
-		UploadCompression:   r.UploadCompression,
-		DownloadCompression: r.DownloadCompression,
-		UploadMTU:           r.UploadMTU,
-		DownloadMTU:         r.DownloadMTU,
-		VerifyCode:          r.VerifyCode,
-		Signature:           r.Signature,
-		MaxPackedBlocks:     r.MaxPackedBlocks,
-		CreatedAt:           r.CreatedAt,
-		LastActivityAt:      lastActivityAt,
-		ReuseUntil:          r.ReuseUntil,
+		ID:                   r.ID,
+		Cookie:               r.Cookie,
+		ResponseMode:         r.ResponseMode,
+		UploadCompression:    r.UploadCompression,
+		DownloadCompression:  r.DownloadCompression,
+		UploadMTU:            r.UploadMTU,
+		DownloadMTU:          r.DownloadMTU,
+		DownloadMTUBytes:     r.DownloadMTUBytes,
+		VerifyCode:           r.VerifyCode,
+		Signature:            r.Signature,
+		MaxPackedBlocks:      r.MaxPackedBlocks,
+		StreamReadBufferSize: r.StreamReadBufferSize,
+		CreatedAt:            r.CreatedAt,
+		LastActivityAt:       lastActivityAt,
+		ReuseUntil:           r.ReuseUntil,
 	}
 }

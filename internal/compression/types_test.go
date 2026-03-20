@@ -44,7 +44,7 @@ func TestCompressPayloadRoundTrip(t *testing.T) {
 
 func TestUnavailableCompressionFallsBackToOff(t *testing.T) {
 	data := bytes.Repeat([]byte("abcabcabcabcabcabcabcabc"), 16)
-	out, used := CompressPayload(data, TypeLZ4, DefaultMinSize)
+	out, used := CompressPayload(data, 255, DefaultMinSize)
 	if used != TypeOff {
 		t.Fatalf("unexpected compression type: got=%d want=%d", used, TypeOff)
 	}

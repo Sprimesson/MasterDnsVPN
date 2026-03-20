@@ -454,19 +454,48 @@ func exchangeUDPQuery(transport *udpQueryTransport, packet []byte, timeout time.
 	if transport == nil || transport.conn == nil {
 		return nil, net.ErrClosed
 	}
+	if len(packet) < 2 {
+		return nil, errors.New("malformed dns query")
+	}
+	expectedID := packet[:2]
+
+	// Drain any stale packets from the buffer (non-blocking) before sending
+	drainBuffer := make([]byte, 2048)
+	for {
+		if err := transport.conn.SetReadDeadline(time.Now()); err != nil {
+			break
+		}
+		if _, err := transport.conn.Read(drainBuffer); err != nil {
+			break
+		}
+	}
+
 	timeout = normalizeTimeout(timeout, time.Second)
-	if err := transport.conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	deadline := time.Now().Add(timeout)
+	if err := transport.conn.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
+
 	if _, err := transport.conn.Write(packet); err != nil {
 		return nil, err
 	}
 
-	n, err := transport.conn.Read(transport.buffer)
-	if err != nil {
-		return nil, err
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, os.ErrDeadlineExceeded
+		}
+
+		n, err := transport.conn.Read(transport.buffer)
+		if err != nil {
+			return nil, err
+		}
+
+		if n >= 2 && transport.buffer[0] == expectedID[0] && transport.buffer[1] == expectedID[1] {
+			return append([]byte(nil), transport.buffer[:n]...), nil
+		}
+		// Stale packet or from another request, continue reading until timeout
 	}
-	return append([]byte(nil), transport.buffer[:n]...), nil
 }
 
 func (c *Client) sendSessionControlPacket(packetType uint8, payload []byte, connections []Connection, timeout time.Duration) (VpnProto.Packet, error) {

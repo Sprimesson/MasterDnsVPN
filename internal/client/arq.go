@@ -94,6 +94,10 @@ type ARQ struct {
 	maxDataRetries  int
 	finDrainTimeout time.Duration
 
+	// SOCKS specific
+	isSocks        bool
+	socksConnected chan struct{}
+
 	// Concurrency
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -116,9 +120,35 @@ func NewARQ(streamID uint16, stream *Stream_client, conn net.Conn, mtu int) *ARQ
 		dataPacketTTL:   600 * time.Second,
 		maxDataRetries:  400,
 		finDrainTimeout: 300 * time.Second,
+		isSocks:         false, // Default, can be set after creation
+		socksConnected:  make(chan struct{}),
 	}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	return a
+}
+
+// SetSocksMode sets the ARQ to wait for a socks connection signal.
+func (a *ARQ) SetSocksMode(isSocks bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.isSocks = isSocks
+	if !isSocks {
+		// If not socks, close the channel so loops don't block
+		select {
+		case <-a.socksConnected:
+		default:
+			close(a.socksConnected)
+		}
+	}
+}
+
+// SignalSocksConnected should be called when SOCKS handshake is done.
+func (a *ARQ) SignalSocksConnected() {
+	select {
+	case <-a.socksConnected:
+	default:
+		close(a.socksConnected)
+	}
 }
 
 // Start launches the core loops (ioLoop and retransmitLoop).
@@ -133,6 +163,13 @@ func (a *ARQ) Start() {
 
 // ioLoop reads from local socket data and enqueues reliable outbound packets.
 func (a *ARQ) ioLoop() {
+	// Wait for socks connection if needed (Python: await self.socks_connected.wait())
+	select {
+	case <-a.ctx.Done():
+		return
+	case <-a.socksConnected:
+	}
+
 	buf := make([]byte, a.mtu)
 	for {
 		select {

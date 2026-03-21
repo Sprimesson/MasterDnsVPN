@@ -10,7 +10,7 @@ package arq
 import (
 	"container/heap"
 	"sync"
-	
+
 	Enums "masterdnsvpn-go/internal/enums"
 )
 

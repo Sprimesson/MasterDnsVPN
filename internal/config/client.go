@@ -81,6 +81,7 @@ type ClientConfig struct {
 	ResolverRemovedServerLogFormat        string            `toml:"RESOLVER_REMOVED_SERVER_LOG_FORMAT"`
 	ResolverAddedServerLogFormat          string            `toml:"RESOLVER_ADDED_SERVER_LOG_FORMAT"`
 	LogLevel                              string            `toml:"LOG_LEVEL"`
+	ARQWindowSize                         int               `toml:"ARQ_WINDOW_SIZE"`
 	Resolvers                             []ResolverAddress `toml:"-"`
 	ResolverMap                           map[string]int    `toml:"-"`
 }
@@ -146,6 +147,7 @@ func defaultClientConfig() ClientConfig {
 		ResolverRemovedServerLogFormat:        "",
 		ResolverAddedServerLogFormat:          "",
 		LogLevel:                              "INFO",
+		ARQWindowSize:                         600,
 	}
 }
 
@@ -247,6 +249,7 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	cfg.SetupPacketDuplicationCount = clampInt(defaultIntBelow(cfg.SetupPacketDuplicationCount, 1, max(2, cfg.PacketDuplicationCount)), cfg.PacketDuplicationCount, 8)
 	cfg.StreamResolverFailoverResendThreshold = clampInt(defaultIntBelow(cfg.StreamResolverFailoverResendThreshold, 1, 2), 1, 64)
 	cfg.StreamResolverFailoverCooldownSec = defaultFloatBelow(cfg.StreamResolverFailoverCooldownSec, 0.1, 1.0)
+	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 600), 1, 4096)
 
 	if cfg.MinUploadMTU < 0 || cfg.MinDownloadMTU < 0 || cfg.MaxUploadMTU < 0 || cfg.MaxDownloadMTU < 0 {
 		return cfg, fmt.Errorf("mtu values cannot be negative")

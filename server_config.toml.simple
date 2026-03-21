@@ -88,3 +88,8 @@ DATA_ENCRYPTION_METHOD = 1
 
 ENCRYPTION_KEY_FILE = "encrypt_key.txt"
 LOG_LEVEL = "INFO"
+
+# ARQ Window Size (Default: 600)
+# This limits the number of out-of-order packets stored in memory per stream.
+ARQ_WINDOW_SIZE = 600
+

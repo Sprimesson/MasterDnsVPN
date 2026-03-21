@@ -1,4 +1,4 @@
-// ==============================================================================
+﻿// ==============================================================================
 // MasterDnsVPN
 // Author: MasterkinG32
 // Github: https://github.com/masterking32
@@ -404,7 +404,7 @@ func TestHandlePacketReturnsResetForLateClosedStreamData(t *testing.T) {
 	sessionID := packet.Payload[0]
 	sessionCookie := packet.Payload[1]
 	now := time.Now()
-	if _, created := srv.streams.EnsureOpen(sessionID, 9, now); !created {
+	if _, created := srv.streams.EnsureOpen(sessionID, 9, 600, now); !created {
 		t.Fatal("expected fresh stream state")
 	}
 	if !srv.streams.MarkReset(sessionID, 9, 5, now) {
@@ -2240,3 +2240,4 @@ func buildTunnelDNSQueryFragment(t *testing.T, codec *security.Codec, name strin
 	}
 	return query
 }
+

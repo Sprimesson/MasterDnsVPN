@@ -20,7 +20,7 @@ import (
 var ErrStreamHandshakeFailed = errors.New("stream handshake failed")
 
 const (
-	streamControlRetryBaseDelay = 150 * time.Millisecond
+	streamControlRetryBaseDelay = 500 * time.Millisecond
 	streamControlRetryMaxDelay  = 700 * time.Millisecond
 	streamControlPollInterval   = 80 * time.Millisecond
 	streamControlPongSleep      = 20 * time.Millisecond

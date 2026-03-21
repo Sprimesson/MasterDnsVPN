@@ -20,7 +20,6 @@ import (
 const (
 	serverClosedStreamRecordTTL = 45 * time.Second
 	serverClosedStreamRecordCap = 1000
-	serverInboundReorderWindow  = 64
 )
 
 type streamStateRecord struct {
@@ -43,11 +42,13 @@ type streamStateRecord struct {
 	InboundPending map[uint16][]byte
 	RemoteFinSeq   uint16
 	RemoteFinSet   bool
+	ARQWindowSize  int
 }
 
 type inboundDataDecision struct {
 	Ack          bool
 	ReadyPayload [][]byte
+	CloseWrite   bool
 }
 
 type streamStateStore struct {
@@ -63,7 +64,7 @@ func newStreamStateStore() *streamStateStore {
 	}
 }
 
-func (s *streamStateStore) EnsureOpen(sessionID uint8, streamID uint16, now time.Time) (*streamStateRecord, bool) {
+func (s *streamStateStore) EnsureOpen(sessionID uint8, streamID uint16, arqWindowSize int, now time.Time) (*streamStateRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -84,6 +85,7 @@ func (s *streamStateStore) EnsureOpen(sessionID uint8, streamID uint16, now time
 		State:          Enums.STREAM_STATE_OPEN,
 		CreatedAt:      now,
 		LastActivityAt: now,
+		ARQWindowSize:  arqWindowSize,
 	}
 	streams[streamID] = record
 	return cloneStreamStateRecord(record), true
@@ -140,18 +142,32 @@ func (s *streamStateStore) Touch(sessionID uint8, streamID uint16, sequenceNum u
 	return cloneStreamStateRecord(record), true
 }
 
-func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, sequenceNum uint16, now time.Time) (*streamStateRecord, bool) {
+func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, sequenceNum uint16, now time.Time) (*streamStateRecord, inboundDataDecision, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	record := s.lookupLocked(sessionID, streamID)
 	if record == nil {
-		return nil, false
+		return nil, inboundDataDecision{}, false
 	}
 	record.LastActivityAt = now
 	record.LastSequence = sequenceNum
 	record.RemoteFinSeq = sequenceNum
 	record.RemoteFinSet = true
+
+	decision := inboundDataDecision{}
+	if record.InboundNextSet && record.InboundNextSeq == record.RemoteFinSeq {
+		decision.CloseWrite = true
+		s.applyRemoteFinStateLocked(record)
+	}
+
+	return cloneStreamStateRecord(record), decision, true
+}
+
+func (s *streamStateStore) applyRemoteFinStateLocked(record *streamStateRecord) {
+	if record == nil {
+		return
+	}
 	streamutil.CloseWrite(record.UpstreamConn)
 	switch record.State {
 	case Enums.STREAM_STATE_HALF_CLOSED_LOCAL:
@@ -159,7 +175,6 @@ func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, seque
 	case Enums.STREAM_STATE_OPEN:
 		record.State = Enums.STREAM_STATE_HALF_CLOSED_REMOTE
 	}
-	return cloneStreamStateRecord(record), true
 }
 
 func (s *streamStateStore) ReceiveInboundData(sessionID uint8, streamID uint16, sequenceNum uint16, payload []byte, now time.Time) (*streamStateRecord, inboundDataDecision, bool) {
@@ -192,7 +207,7 @@ func (s *streamStateStore) ReceiveInboundData(sessionID uint8, streamID uint16, 
 	}
 
 	diff := uint16(sequenceNum - record.InboundNextSeq)
-	if diff > serverInboundReorderWindow {
+	if diff > uint16(record.ARQWindowSize) {
 		return cloneStreamStateRecord(record), inboundDataDecision{}, true
 	}
 
@@ -200,7 +215,9 @@ func (s *streamStateStore) ReceiveInboundData(sessionID uint8, streamID uint16, 
 		record.InboundPending = make(map[uint16][]byte, 8)
 	}
 	if _, exists := record.InboundPending[sequenceNum]; !exists {
-		record.InboundPending[sequenceNum] = append([]byte(nil), payload...)
+		if len(record.InboundPending) < record.ARQWindowSize {
+			record.InboundPending[sequenceNum] = append([]byte(nil), payload...)
+		}
 	}
 
 	decision := inboundDataDecision{Ack: true}
@@ -215,6 +232,11 @@ func (s *streamStateStore) ReceiveInboundData(sessionID uint8, streamID uint16, 
 		if record.InboundNextSeq == 0 {
 			record.InboundNextSeq = 1
 		}
+	}
+
+	if record.RemoteFinSet && record.InboundNextSet && record.InboundNextSeq == record.RemoteFinSeq {
+		decision.CloseWrite = true
+		s.applyRemoteFinStateLocked(record)
 	}
 
 	return cloneStreamStateRecord(record), decision, true

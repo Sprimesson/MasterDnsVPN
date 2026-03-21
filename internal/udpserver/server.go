@@ -88,6 +88,7 @@ type Server struct {
 	lastDropLogUnix          atomic.Int64
 	pongNonce                atomic.Uint32
 	invalidDropMode          atomic.Uint32
+	arqWindowSize            int
 }
 
 type request struct {
@@ -125,6 +126,7 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 	}
 	return &Server{
 		cfg:                  cfg,
+		arqWindowSize:        cfg.ARQWindowSize,
 		log:                  log,
 		codec:                codec,
 		domainMatcher:        domainMatcher.New(cfg.Domain, cfg.MinVPNLabelLength),
@@ -196,11 +198,11 @@ func (s *Server) Run(ctx context.Context) error {
 	defer conn.Close()
 
 	if err := conn.SetReadBuffer(s.cfg.SocketBufferSize); err != nil {
-		s.log.Warnf("âš ï¸ <yellow>UDP Read Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
+		s.log.Warnf("Ã¢Å¡Â Ã¯Â¸Â <yellow>UDP Read Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
 	}
 
 	if err := conn.SetWriteBuffer(s.cfg.SocketBufferSize); err != nil {
-		s.log.Warnf("âš ï¸ <yellow>UDP Write Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
+		s.log.Warnf("Ã¢Å¡Â Ã¯Â¸Â <yellow>UDP Write Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
 	}
 
 	s.log.Infof(
@@ -603,7 +605,7 @@ func (s *Server) logInvalidSessionDrop(reason string, sessionID uint8, receivedC
 	}
 	if expectedCookie == 0 {
 		s.log.Debugf(
-			"🪂 <yellow>Sending Session Drop</yellow> <magenta>|</magenta> <blue>Reason</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Received</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan>",
+			"ðŸª‚ <yellow>Sending Session Drop</yellow> <magenta>|</magenta> <blue>Reason</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Received</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan>",
 			reason,
 			sessionID,
 			receivedCookie,
@@ -612,7 +614,7 @@ func (s *Server) logInvalidSessionDrop(reason string, sessionID uint8, receivedC
 		return
 	}
 	s.log.Debugf(
-		"🪂 <yellow>Sending Session Drop</yellow> <magenta>|</magenta> <blue>Reason</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Expected</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Received</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan>",
+		"ðŸª‚ <yellow>Sending Session Drop</yellow> <magenta>|</magenta> <blue>Reason</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Expected</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Received</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan>",
 		reason,
 		sessionID,
 		expectedCookie,
@@ -1147,7 +1149,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet, sessionReco
 			})
 			return
 		}
-		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, now)
+		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, s.arqWindowSize, now)
 		upstreamConn, err := s.dialSOCKSStreamTarget(s.cfg.ForwardIP, uint16(s.cfg.ForwardPort), nil)
 		if err != nil {
 			_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
@@ -1169,7 +1171,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet, sessionReco
 		}
 		s.startStreamUpstreamReadLoop(vpnPacket.SessionID, vpnPacket.StreamID, upstreamConn, sessionRecord.DownloadCompression, sessionRecord.StreamReadBufferSize)
 	} else {
-		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, now)
+		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, s.arqWindowSize, now)
 	}
 
 	_, _ = s.streams.Touch(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
@@ -1381,13 +1383,21 @@ func (s *Server) processDeferredStreamData(vpnPacket VpnProto.Packet) {
 		if !decision.Ack {
 			if s.log != nil {
 				s.log.Debugf(
-					"\U0001F6A7 <yellow>Inbound Stream Data Deferred</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+					"\u26a7 <yellow>Inbound Stream Data Deferred</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
 					vpnPacket.SessionID,
 					vpnPacket.StreamID,
 					vpnPacket.SequenceNum,
 				)
 			}
 			return
+		}
+
+		if decision.CloseWrite && s.log != nil {
+			s.log.Debugf(
+				"\u2705 <green>Inbound Stream FIN Sequenced</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan>",
+				vpnPacket.SessionID,
+				vpnPacket.StreamID,
+			)
 		}
 		if streamRecord.UpstreamConn == nil || !streamRecord.Connected {
 			_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
@@ -1430,6 +1440,16 @@ func (s *Server) processDeferredStreamData(vpnPacket VpnProto.Packet) {
 				return
 			}
 		}
+
+		if decision.CloseWrite {
+			_ = s.streams.FinalizeIfDrained(
+				vpnPacket.SessionID,
+				vpnPacket.StreamID,
+				now,
+				s.streamOutbound.HasPendingStream(vpnPacket.SessionID, vpnPacket.StreamID),
+			)
+		}
+
 		_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
 			PacketType:  Enums.PACKET_STREAM_DATA_ACK,
 			StreamID:    vpnPacket.StreamID,
@@ -1632,7 +1652,8 @@ func (s *Server) handleStreamFinRequest(vpnPacket VpnProto.Packet, sessionRecord
 		})
 		return true
 	}
-	if _, ok := s.streams.MarkRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now); !ok {
+	_, decision, ok := s.streams.MarkRemoteFin(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
+	if !ok {
 		_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
 			PacketType:  Enums.PACKET_STREAM_RST,
 			StreamID:    vpnPacket.StreamID,
@@ -1645,12 +1666,14 @@ func (s *Server) handleStreamFinRequest(vpnPacket VpnProto.Packet, sessionRecord
 		StreamID:    vpnPacket.StreamID,
 		SequenceNum: vpnPacket.SequenceNum,
 	})
-	_ = s.streams.FinalizeIfDrained(
-		vpnPacket.SessionID,
-		vpnPacket.StreamID,
-		now,
-		s.streamOutbound.HasPendingStream(vpnPacket.SessionID, vpnPacket.StreamID),
-	)
+	if decision.CloseWrite {
+		_ = s.streams.FinalizeIfDrained(
+			vpnPacket.SessionID,
+			vpnPacket.StreamID,
+			now,
+			s.streamOutbound.HasPendingStream(vpnPacket.SessionID, vpnPacket.StreamID),
+		)
+	}
 	return true
 }
 
@@ -1750,3 +1773,5 @@ func (s *Server) expireStalledOutboundStreams(sessionID uint8, now time.Time) {
 		}
 	}
 }
+
+

@@ -1,4 +1,4 @@
-// ==============================================================================
+﻿// ==============================================================================
 // MasterDnsVPN
 // Author: MasterkinG32
 // Github: https://github.com/masterking32
@@ -42,7 +42,7 @@ func TestHandlePacketSessionCloseCleansSessionState(t *testing.T) {
 	sessionCookie := packet.Payload[1]
 	now := time.Unix(1700000000, 0)
 
-	if _, ok := srv.streams.EnsureOpen(sessionID, 7, now); !ok {
+	if _, ok := srv.streams.EnsureOpen(sessionID, 7, 600, now); !ok {
 		t.Fatal("expected stream state to open")
 	}
 	if !srv.queueMainSessionPacket(sessionID, VpnProto.Packet{PacketType: Enums.PACKET_PING}) {
@@ -77,3 +77,4 @@ func TestHandlePacketSessionCloseCleansSessionState(t *testing.T) {
 		t.Fatalf("expected session fragment cache to be cleared, ready=%v completed=%v", ready, completed)
 	}
 }
+

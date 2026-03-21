@@ -98,6 +98,7 @@ type Client struct {
 	healthRuntimeRun                      bool
 	recheckConnectionFn                   func(*Connection) bool
 	streamControlReplyMu                  sync.Mutex
+	arqWindowSize                         int
 	streamControlReplies                  map[streamControlReplyKey]cachedStreamControlReply
 	streamControlStateMu                  sync.Mutex
 	streamControlStates                   map[streamControlStateKey]clientStreamControlState
@@ -166,6 +167,7 @@ type clientStream struct {
 	retryBase            time.Duration
 	srtt                 time.Duration
 	rttVar               time.Duration
+	arqWindowSize        int
 }
 
 type clientStreamTXPacket struct {
@@ -282,6 +284,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		streamTXQueueLimit:        cfg.StreamTXQueueLimit,
 		streamTXMaxRetries:        cfg.StreamTXMaxRetries,
 		streamTXTTL:               time.Duration(cfg.StreamTXTTLSeconds * float64(time.Second)),
+		arqWindowSize:             cfg.ARQWindowSize,
 		resolverHealth:            make(map[string]*resolverHealthState, len(cfg.Domains)*len(cfg.Resolvers)),
 		resolverRecheck:           make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
 		runtimeDisabled:           make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),

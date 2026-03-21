@@ -61,6 +61,7 @@ type ServerConfig struct {
 	DataEncryptionMethod              int      `toml:"DATA_ENCRYPTION_METHOD"`
 	EncryptionKeyFile                 string   `toml:"ENCRYPTION_KEY_FILE"`
 	LogLevel                          string   `toml:"LOG_LEVEL"`
+	ARQWindowSize                     int      `toml:"ARQ_WINDOW_SIZE"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -108,6 +109,7 @@ func defaultServerConfig() ServerConfig {
 		DataEncryptionMethod:              1,
 		EncryptionKeyFile:                 "encrypt_key.txt",
 		LogLevel:                          "INFO",
+		ARQWindowSize:                     600,
 	}
 }
 
@@ -267,6 +269,8 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "INFO"
 	}
+
+	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 600), 1, 4096)
 
 	return cfg, nil
 }

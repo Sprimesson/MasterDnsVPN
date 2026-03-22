@@ -13,6 +13,7 @@ import (
 	"time"
 
 	Enums "masterdnsvpn-go/internal/enums"
+	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 const PackedControlBlockSize = 7
@@ -264,16 +265,48 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		}
 
 		for _, conn := range conns {
+			// Choose domain for this connection
+			domain := conn.Domain
+			if domain == "" {
+				domain = c.cfg.Domains[0]
+			}
+
+			// Build THE final wrapped DNS packet
+			opts := VpnProto.BuildOptions{
+				SessionID:     c.sessionID,
+				PacketType:    finalPacket.packetType,
+				SessionCookie: c.sessionCookie,
+			}
+
+			if !wasPacked {
+				opts.StreamID = selected.StreamID
+				opts.SequenceNum = item.SequenceNum
+				opts.Payload = item.Payload
+			} else {
+				opts.Payload = finalPacket.payload
+			}
+
+			encoded, err := VpnProto.BuildEncodedAuto(opts, c.codec, c.cfg.CompressionMinSize)
+			if err != nil {
+				c.log.Errorf("Failed to encode packet: %v", err)
+				continue
+			}
+
+			dnsPacket, err := buildTunnelTXTQuestion(domain, encoded)
+			if err != nil {
+				c.log.Errorf("Failed to build DNS question: %v", err)
+				continue
+			}
+
 			pkt := finalPacket
 			pkt.conn = conn
+			pkt.payload = dnsPacket
 
 			// Send to TX channel
 			c.log.Debugf("📤 <green>Dispatching packet (Type: %d) to %s:%d</green>", pkt.packetType, conn.Resolver, conn.ResolverPort)
 			select {
 			case c.txChannel <- pkt:
 			default:
-				// Channel full, drop or wait? Python TX worker might be slow.
-				// In Go, we'll try to push to avoid blocking the dispatcher too much.
 			}
 		}
 

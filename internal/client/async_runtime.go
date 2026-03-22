@@ -18,6 +18,7 @@ import (
 	"masterdnsvpn-go/internal/client/handlers"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	"masterdnsvpn-go/internal/logger"
+	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 type asyncPacket struct {
@@ -279,9 +280,27 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 // SendBurstPacket adds a packet to the transmission queue.
 func (c *Client) SendBurstPacket(conn Connection, payload []byte, packetType uint8) {
 	c.pingManager.NotifyPacket(packetType, false)
+	
+	domain := conn.Domain
+	if domain == "" {
+		domain = c.cfg.Domains[0]
+	}
+
+	dnsPacket, err := c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
+		SessionID:     c.sessionID,
+		PacketType:    packetType,
+		SessionCookie: c.sessionCookie,
+		Payload:       payload,
+	})
+
+	if err != nil {
+		c.log.Errorf("Failed to build burst DNS query: %v", err)
+		return
+	}
+
 	c.log.Debugf("📤 <yellow>Sending burst packet (Type: %d) to %s:%d</yellow>", packetType, conn.Resolver, conn.ResolverPort)
 	select {
-	case c.txChannel <- asyncPacket{conn: conn, payload: payload, packetType: packetType}:
+	case c.txChannel <- asyncPacket{conn: conn, payload: dnsPacket, packetType: packetType}:
 	default:
 	}
 }

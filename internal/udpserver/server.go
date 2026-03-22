@@ -138,12 +138,12 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 			time.Duration(cfg.DNSCacheTTLSeconds*float64(time.Second)),
 			dnsFragmentTimeout,
 		),
-		dnsResolveInflight: newDNSResolveInflightManager(dnsFragmentTimeout),
-		dnsUpstreamServers: append([]string(nil), cfg.DNSUpstreamServers...),
-		dnsFragments:       fragmentstore.New[dnsFragmentKey](32),
-		socks5Fragments:    fragmentstore.New[socks5FragmentKey](32),
+		dnsResolveInflight:  newDNSResolveInflightManager(dnsFragmentTimeout),
+		dnsUpstreamServers:  append([]string(nil), cfg.DNSUpstreamServers...),
+		dnsFragments:        fragmentstore.New[dnsFragmentKey](32),
+		socks5Fragments:     fragmentstore.New[socks5FragmentKey](32),
 		streamDataFragments: fragmentstore.New[streamDataFragmentKey](128),
-		dnsFragmentTimeout: dnsFragmentTimeout,
+		dnsFragmentTimeout:  dnsFragmentTimeout,
 		dnsUpstreamBufferPool: sync.Pool{
 			New: func() any {
 				return make([]byte, 65535)
@@ -378,6 +378,9 @@ func (s *Server) safeHandlePacket(packet []byte) (response []byte) {
 func (s *Server) handlePacket(packet []byte) []byte {
 	parsed, err := DnsParser.ParseDNSRequestLite(packet)
 	if err != nil {
+		if s.debugLoggingEnabled() {
+			s.log.Debugf("\u26a0\ufe0f <yellow>DNS Parse Failed</yellow> <magenta>|</magenta> <blue>Error</blue>: <cyan>%v</cyan>", err)
+		}
 		if errors.Is(err, DnsParser.ErrNotDNSRequest) || errors.Is(err, DnsParser.ErrPacketTooShort) {
 			return nil
 		}
@@ -390,6 +393,9 @@ func (s *Server) handlePacket(packet []byte) []byte {
 	}
 
 	decision := s.domainMatcher.Match(parsed)
+	if s.debugLoggingEnabled() {
+		s.log.Debugf("\u231b <blue>Domain Match Decision</blue> <magenta>|</magenta> <blue>Name</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Action</blue>: <cyan>%v</cyan>", parsed.FirstQuestion.Name, decision.Action)
+	}
 	if decision.Action == domainMatcher.ActionProcess {
 		return s.handleTunnelCandidate(packet, parsed, decision)
 	}
@@ -404,7 +410,14 @@ func (s *Server) handlePacket(packet []byte) []byte {
 func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
 	vpnPacket, err := VpnProto.ParseInflatedFromLabels(decision.Labels, s.codec)
 	if err != nil {
+		if s.debugLoggingEnabled() {
+			s.log.Debugf("\u26a0\ufe0f <yellow>VPN Proto Parse Failed</yellow> <magenta>|</magenta> <blue>Error</blue>: <cyan>%v</cyan>", err)
+		}
 		return buildNoDataResponseLite(packet, parsed)
+	}
+
+	if s.debugLoggingEnabled() {
+		s.log.Debugf("\U0001F4E5 <blue>Dispatching packet</blue> <magenta>|</magenta> <blue>Type</blue>: <cyan>%d</cyan>", vpnPacket.PacketType)
 	}
 
 	if vpnPacket.PacketType == Enums.PACKET_SESSION_CLOSE {
@@ -828,7 +841,7 @@ func (s *Server) packControlBlocks(record *sessionRecord, first VpnProto.Packet)
 
 	// For now, only pack the first one to avoid complexity in this step
 	// Real implementation would loop here to dequeue more compatible blocks
-	
+
 	first.PacketType = Enums.PACKET_PACKED_CONTROL_BLOCKS
 	first.Payload = payload
 	return &first

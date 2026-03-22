@@ -295,3 +295,12 @@ func (s *Server) removeSOCKS5SynFragmentsForSession(sessionID uint8) {
 		return key.sessionID == sessionID
 	})
 }
+
+func (s *Server) removeSOCKS5SynFragmentsForStream(sessionID uint8, streamID uint16) {
+	if s == nil || s.socks5Fragments == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	s.socks5Fragments.RemoveIf(func(key socks5FragmentKey) bool {
+		return key.sessionID == sessionID && key.streamID == streamID
+	})
+}

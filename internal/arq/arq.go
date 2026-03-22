@@ -398,6 +398,75 @@ func (a *ARQ) MarkSocksFailed(errCode uint8) {
 	a.mu.Unlock()
 }
 
+func (a *ARQ) InjectOutboundData(data []byte) {
+	if len(data) == 0 || a.isClosed() {
+		return
+	}
+
+	offset := 0
+	for offset < len(data) && !a.isClosed() {
+		end := offset + a.mtu
+		if end > len(data) {
+			end = len(data)
+		}
+		chunk := append([]byte(nil), data[offset:end]...)
+
+		a.mu.Lock()
+		sn := a.sndNxt
+		a.sndNxt++
+		now := time.Now()
+		a.sndBuf[sn] = &arqDataItem{
+			Data:            chunk,
+			CreatedAt:       now,
+			LastSentAt:      now,
+			Retries:         0,
+			CurrentRTO:      a.rto,
+			CompressionType: a.compressionType,
+		}
+		if len(a.sndBuf) >= a.limit {
+			a.clearWindowNotFull()
+		}
+		a.mu.Unlock()
+
+		a.enqueuer.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA), Enums.PACKET_STREAM_DATA, sn, 0, 0, a.compressionType, chunk)
+		offset = end
+	}
+}
+
+func (a *ARQ) CancelPendingSOCKS(reason string) {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	a.closeReason = reason
+	a.setState(StateReset)
+	a.stopLocalRead = true
+	a.sndBuf = make(map[uint16]*arqDataItem)
+	a.rcvBuf = make(map[uint16][]byte)
+	for key, item := range a.controlSndBuf {
+		if item.PacketType == Enums.PACKET_SOCKS5_SYN {
+			delete(a.controlSndBuf, key)
+		}
+	}
+	a.signalWindowNotFull()
+	a.mu.Unlock()
+
+	a.MarkSocksFailed(Enums.PACKET_STREAM_RST)
+	if a.localConn != nil {
+		_ = a.localConn.Close()
+	}
+
+	if !a.rstSent && !a.rstReceived {
+		a.mu.Lock()
+		sn := a.sndNxt
+		a.mu.Unlock()
+		a.MarkRstSent(&sn)
+		ackType := uint8(Enums.PACKET_STREAM_RST_ACK)
+		a.SendControlPacket(Enums.PACKET_STREAM_RST, *a.rstSeqSent, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), a.enableControlReliability, &ackType)
+	}
+}
+
 func (a *ARQ) GetSocksHandshakeResult() (uint8, bool) {
 	select {
 	case <-a.socksHandshake:
@@ -550,6 +619,10 @@ func (a *ARQ) ioLoop() {
 	select {
 	case <-a.socksHandshake:
 	case <-a.ctx.Done():
+		return
+	}
+
+	if errCode, ok := a.GetSocksHandshakeResult(); ok && errCode != 0 {
 		return
 	}
 
@@ -957,6 +1030,7 @@ func (a *ARQ) ReceiveControlAck(ackPacketType uint8, sequenceNum uint16, fragmen
 	} else if ackPacketType == Enums.PACKET_STREAM_RST_ACK {
 		a.mu.Unlock()
 		a.markRstAcked(sequenceNum)
+		a.Close("RST acknowledged", false)
 		a.mu.Lock()
 	}
 

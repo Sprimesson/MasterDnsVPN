@@ -493,28 +493,21 @@ func (s *Server) handleClosedStreamPacket(vpnPacket VpnProto.Packet) bool {
 		return false
 	}
 
-	packet := VpnProto.Packet{
-		StreamID:    vpnPacket.StreamID,
-		SequenceNum: vpnPacket.SequenceNum,
-	}
+	return s.enqueueMissingStreamReset(record, vpnPacket)
+}
 
-	switch vpnPacket.PacketType {
-	case Enums.PACKET_STREAM_FIN:
-		packet.PacketType = Enums.PACKET_STREAM_FIN_ACK
-	case Enums.PACKET_STREAM_RST:
-		packet.PacketType = Enums.PACKET_STREAM_RST_ACK
-	case Enums.PACKET_SOCKS5_SYN:
-		packet.PacketType = Enums.PACKET_SOCKS5_CONNECT_FAIL
-		packet.SequenceNum = 0
-	case Enums.PACKET_STREAM_SYN, Enums.PACKET_STREAM_DATA, Enums.PACKET_STREAM_RESEND, Enums.PACKET_STREAM_DATA_ACK:
-		packet.PacketType = Enums.PACKET_STREAM_RST
-		packet.SequenceNum = 0
-	default:
+func (s *Server) enqueueMissingStreamReset(record *sessionRecord, vpnPacket VpnProto.Packet) bool {
+	if s == nil || record == nil || vpnPacket.StreamID == 0 {
 		return false
 	}
 
-	if packet.PacketType != 0 {
-		_ = s.queueSessionPacket(vpnPacket.SessionID, packet)
+	switch vpnPacket.PacketType {
+	case Enums.PACKET_STREAM_RST:
+		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST_ACK, vpnPacket.StreamID, vpnPacket.SequenceNum)
+	case Enums.PACKET_STREAM_RST_ACK:
+		return true
+	default:
+		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 	}
 	return true
 }
@@ -754,6 +747,10 @@ func (s *Server) dequeueSessionResponse(sessionID uint8, now time.Time) (*VpnPro
 
 	record.mu.Lock()
 	defer record.mu.Unlock()
+
+	if pkt, ok := record.dequeueOrphanReset(); ok && pkt != nil {
+		return pkt, true
+	}
 
 	// Round-Robin through ActiveStreams (includes Stream 0 which replaces MainQueue)
 	if len(record.ActiveStreams) == 0 {
@@ -1512,6 +1509,14 @@ func (s *Server) handleSOCKS5SynRequest(vpnPacket VpnProto.Packet, sessionRecord
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 || !vpnPacket.HasSequenceNum || sessionRecord == nil {
 		return false
 	}
+	record, ok := s.sessions.Get(vpnPacket.SessionID)
+	if !ok {
+		return false
+	}
+	if record.isRecentlyClosed(vpnPacket.StreamID, time.Now()) {
+		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
+		return true
+	}
 	run := func() {
 		s.processDeferredSOCKS5Syn(vpnPacket, sessionRecord)
 	}
@@ -1568,6 +1573,13 @@ func (s *Server) handleStreamDataRequest(vpnPacket VpnProto.Packet, sessionRecor
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 || !vpnPacket.HasSequenceNum || sessionRecord == nil {
 		return false
 	}
+	record, ok := s.sessions.Get(vpnPacket.SessionID)
+	if !ok {
+		return false
+	}
+	if _, exists := record.getStream(vpnPacket.StreamID); !exists {
+		return s.enqueueMissingStreamReset(record, vpnPacket)
+	}
 	run := func() {
 		s.processDeferredStreamData(vpnPacket, sessionRecord)
 	}
@@ -1586,8 +1598,11 @@ func (s *Server) handleStreamFinRequest(vpnPacket VpnProto.Packet, sessionRecord
 	if !ok {
 		return false
 	}
+	stream, exists := record.getStream(vpnPacket.StreamID)
+	if !exists || stream == nil {
+		return s.enqueueMissingStreamReset(record, vpnPacket)
+	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, arq.Config{}, nil, s.log)
 	stream.ARQ.MarkFinReceived(vpnPacket.SequenceNum)
 	return true
 }
@@ -1602,8 +1617,19 @@ func (s *Server) handleStreamRSTRequest(vpnPacket VpnProto.Packet, sessionRecord
 		return false
 	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, arq.Config{}, nil, s.log)
-	stream.ARQ.MarkRstReceived(vpnPacket.SequenceNum)
+	now := time.Now()
+	stream, ok := record.getStream(vpnPacket.StreamID)
+	if ok && stream != nil {
+		stream.ARQ.MarkRstReceived(vpnPacket.SequenceNum)
+		stream.Abort("peer reset before/while connect")
+		record.removeStream(vpnPacket.StreamID, now)
+	} else {
+		record.noteStreamClosed(vpnPacket.StreamID, now)
+	}
+
+	s.removeSOCKS5SynFragmentsForStream(vpnPacket.SessionID, vpnPacket.StreamID)
+	s.removeStreamDataFragmentsForStream(vpnPacket.SessionID, vpnPacket.StreamID)
+	record.enqueueOrphanReset(Enums.PACKET_STREAM_RST_ACK, vpnPacket.StreamID, vpnPacket.SequenceNum)
 	return true
 }
 
@@ -1616,8 +1642,11 @@ func (s *Server) handleStreamAckPacket(vpnPacket VpnProto.Packet, sessionRecord 
 	if !ok {
 		return false
 	}
+	stream, exists := record.getStream(vpnPacket.StreamID)
+	if !exists || stream == nil {
+		return s.enqueueMissingStreamReset(record, vpnPacket)
+	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, arq.Config{}, nil, s.log)
 	if vpnPacket.PacketType == Enums.PACKET_STREAM_DATA_ACK {
 		stream.ARQ.ReceiveAck(vpnPacket.SequenceNum)
 	} else {

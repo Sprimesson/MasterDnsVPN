@@ -99,6 +99,9 @@ type Client struct {
 	streamsMu      sync.RWMutex
 	active_streams map[uint16]*Stream_client
 	last_stream_id uint16
+	orphanMu       sync.Mutex
+	orphanPackets  []VpnProto.Packet
+	orphanIndex    map[uint32]int
 
 	// Signal to wake up dispatcher
 	txSignal chan struct{}
@@ -155,7 +158,7 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 	c.streamsMu.Unlock()
 
 	if !ok || s == nil {
-		// Stream not found, potentially old packet or race condition
+		c.handleMissingStreamPacket(packet)
 		return nil
 	}
 
@@ -169,9 +172,18 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 		arqObj.ReceiveData(packet.SequenceNum, packet.Payload)
 	case Enums.PACKET_STREAM_DATA_ACK:
 		arqObj.ReceiveAck(packet.SequenceNum)
+	case Enums.PACKET_STREAM_RST:
+		arqObj.MarkRstReceived(packet.SequenceNum)
+		arqObj.SendControlPacket(Enums.PACKET_STREAM_RST_ACK, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST_ACK), false, nil)
+		c.removeStream(packet.StreamID)
 	default:
 		// Handle generic control ACKs (acks to our SYN, etc.)
 		arqObj.ReceiveControlAck(packet.PacketType, packet.SequenceNum, packet.FragmentID)
+		if packet.PacketType == Enums.PACKET_STREAM_RST_ACK {
+			if s.StatusValue() == streamStatusCancelled || arqObj.IsClosed() {
+				c.removeStream(packet.StreamID)
+			}
+		}
 	}
 
 	return nil
@@ -292,6 +304,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		txChannel:            make(chan asyncPacket, 1024),
 		rxChannel:            make(chan asyncReadPacket, 1024),
 		active_streams:       make(map[uint16]*Stream_client),
+		orphanIndex:          make(map[uint32]int),
 		txSignal:             make(chan struct{}, 1),
 
 		// DNS Management

@@ -8,6 +8,8 @@
 package client
 
 import (
+	"errors"
+	"io"
 	"net"
 	"sync" // Added for sync.Pool
 	"time"
@@ -22,6 +24,15 @@ var txPacketPool = sync.Pool{
 		return &clientStreamTXPacket{}
 	},
 }
+
+const (
+	streamStatusPending         = "PENDING"
+	streamStatusSocksConnecting = "SOCKS_CONNECTING"
+	streamStatusActive          = "ACTIVE"
+	streamStatusSocksFailed     = "SOCKS_FAILED"
+	streamStatusCancelled       = "CANCELLED"
+	streamStatusClosed          = "CLOSED"
+)
 
 // Stream_client represents a single stream's data structure, mirroring the Python version's
 // 'active_streams' dictionary elements.
@@ -48,6 +59,13 @@ type Stream_client struct {
 	ResolverResendStreak   int
 	LastResolverFailoverAt time.Time
 	HandshakeLastProgress  time.Time
+
+	statusMu           sync.RWMutex
+	pendingWatchCancel chan struct{}
+	pendingWatchDone   chan struct{}
+	pendingWatchOnce   sync.Once
+	pendingLocalDataMu sync.Mutex
+	pendingLocalData   [][]byte
 }
 
 // getTrackingKey generates a unified key for duplicate prevention.
@@ -107,7 +125,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		NetConn:            conn,
 		CreateTime:         now,
 		LastActivityTime:   now,
-		Status:             "PENDING",
+		Status:             streamStatusPending,
 		StreamCreating:     false,
 		PendingInboundData: make(map[uint16][]byte),
 		InitialPayload:     targetPayload,
@@ -153,6 +171,11 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 	}
 	c.active_streams[streamID] = s
 	c.streamsMu.Unlock()
+
+	if conn != nil && streamID != 0 && c.cfg.ProtocolType == "SOCKS5" {
+		s.SetStatus(streamStatusSocksConnecting)
+		s.startPendingSOCKSWatch()
+	}
 
 	return s
 }
@@ -214,6 +237,8 @@ func (s *Stream_client) GetQueuedPacket(packetType uint8, sequenceNum uint16, fr
 
 // Close gracefully shuts down the stream and releases all resources.
 func (s *Stream_client) Close() {
+	s.stopPendingSOCKSWatch(false)
+
 	// 1. Close the ARQ object if it exists
 	if s.Stream != nil {
 		if a, ok := s.Stream.(*arq.ARQ); ok {
@@ -235,7 +260,7 @@ func (s *Stream_client) Close() {
 
 	// 4. Clear inbound buffer
 	s.PendingInboundData = nil
-	s.Status = "CLOSED"
+	s.SetStatus(streamStatusClosed)
 }
 
 // ReleaseTXPacket returns a packet to the pool.
@@ -245,6 +270,126 @@ func (s *Stream_client) ReleaseTXPacket(p *clientStreamTXPacket) {
 	}
 	p.Payload = nil // Clear payload reference
 	txPacketPool.Put(p)
+}
+
+func (s *Stream_client) SetStatus(status string) {
+	if s == nil {
+		return
+	}
+	s.statusMu.Lock()
+	s.Status = status
+	s.statusMu.Unlock()
+}
+
+func (s *Stream_client) StatusValue() string {
+	if s == nil {
+		return streamStatusClosed
+	}
+	s.statusMu.RLock()
+	status := s.Status
+	s.statusMu.RUnlock()
+	return status
+}
+
+func (s *Stream_client) appendPendingLocalData(chunk []byte) {
+	if s == nil || len(chunk) == 0 {
+		return
+	}
+	buf := append([]byte(nil), chunk...)
+	s.pendingLocalDataMu.Lock()
+	s.pendingLocalData = append(s.pendingLocalData, buf)
+	s.pendingLocalDataMu.Unlock()
+}
+
+func (s *Stream_client) takePendingLocalData() [][]byte {
+	if s == nil {
+		return nil
+	}
+	s.pendingLocalDataMu.Lock()
+	chunks := s.pendingLocalData
+	s.pendingLocalData = nil
+	s.pendingLocalDataMu.Unlock()
+	return chunks
+}
+
+func (s *Stream_client) startPendingSOCKSWatch() {
+	if s == nil || s.NetConn == nil {
+		return
+	}
+
+	s.pendingWatchOnce.Do(func() {
+		s.pendingWatchCancel = make(chan struct{})
+		s.pendingWatchDone = make(chan struct{})
+
+		go func() {
+			defer close(s.pendingWatchDone)
+
+			readBufSize := s.client.syncedUploadMTU
+			if readBufSize <= 0 {
+				readBufSize = 4096
+			}
+			buf := make([]byte, readBufSize)
+
+			for {
+				select {
+				case <-s.pendingWatchCancel:
+					return
+				default:
+				}
+
+				if s.StatusValue() != streamStatusSocksConnecting {
+					return
+				}
+
+				_ = s.NetConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+				n, err := s.NetConn.Read(buf)
+				if n > 0 {
+					s.appendPendingLocalData(buf[:n])
+				}
+
+				if err == nil {
+					continue
+				}
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+
+				if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+					s.client.handlePendingSOCKSLocalClose(s.StreamID, "local SOCKS connection closed before connect")
+					return
+				}
+
+				s.client.handlePendingSOCKSLocalClose(s.StreamID, "local SOCKS connection failed before connect: "+err.Error())
+				return
+			}
+		}()
+	})
+}
+
+func (s *Stream_client) stopPendingSOCKSWatch(wait bool) {
+	if s == nil || s.pendingWatchCancel == nil {
+		return
+	}
+
+	select {
+	case <-s.pendingWatchCancel:
+	default:
+		close(s.pendingWatchCancel)
+	}
+
+	if wait && s.pendingWatchDone != nil {
+		select {
+		case <-s.pendingWatchDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	// The pending watcher uses short read deadlines to probe early close/data.
+	// Clear any leftover deadline before ARQ takes over normal blocking reads,
+	// otherwise the first local read after SOCKS connect can look like a fatal error.
+	if s.NetConn != nil {
+		_ = s.NetConn.SetReadDeadline(time.Time{})
+	}
 }
 
 // -----------------------------------------------------------------------------------------
@@ -333,4 +478,6 @@ func (c *Client) CloseAllStreams() {
 			}
 		}
 	}
+
+	c.clearOrphanResets()
 }

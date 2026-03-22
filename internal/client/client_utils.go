@@ -103,3 +103,84 @@ func (c *Client) connectionPtrByKey(key string) *Connection {
 	}
 	return nil
 }
+
+func orphanResetKey(packetType uint8, streamID uint16) uint32 {
+	return uint32(packetType)<<16 | uint32(streamID)
+}
+
+func (c *Client) enqueueOrphanReset(packetType uint8, streamID uint16, sequenceNum uint16) {
+	if c == nil || streamID == 0 {
+		return
+	}
+
+	packet := VpnProto.Packet{
+		PacketType:     packetType,
+		StreamID:       streamID,
+		HasStreamID:    true,
+		SequenceNum:    sequenceNum,
+		HasSequenceNum: sequenceNum != 0,
+	}
+
+	key := orphanResetKey(packetType, streamID)
+
+	c.orphanMu.Lock()
+	if idx, ok := c.orphanIndex[key]; ok && idx >= 0 && idx < len(c.orphanPackets) {
+		c.orphanPackets[idx] = packet
+	} else {
+		c.orphanIndex[key] = len(c.orphanPackets)
+		c.orphanPackets = append(c.orphanPackets, packet)
+	}
+	c.orphanMu.Unlock()
+
+	select {
+	case c.txSignal <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Client) dequeueOrphanReset() (*VpnProto.Packet, bool) {
+	if c == nil {
+		return nil, false
+	}
+
+	c.orphanMu.Lock()
+	defer c.orphanMu.Unlock()
+
+	if len(c.orphanPackets) == 0 {
+		return nil, false
+	}
+
+	packet := c.orphanPackets[0]
+	c.orphanPackets = c.orphanPackets[1:]
+	delete(c.orphanIndex, orphanResetKey(packet.PacketType, packet.StreamID))
+	for i := range c.orphanPackets {
+		c.orphanIndex[orphanResetKey(c.orphanPackets[i].PacketType, c.orphanPackets[i].StreamID)] = i
+	}
+
+	return &packet, true
+}
+
+func (c *Client) clearOrphanResets() {
+	if c == nil {
+		return
+	}
+	c.orphanMu.Lock()
+	c.orphanPackets = nil
+	clear(c.orphanIndex)
+	c.orphanMu.Unlock()
+}
+
+func (c *Client) handleMissingStreamPacket(packet VpnProto.Packet) {
+	if c == nil || !packet.HasStreamID || packet.StreamID == 0 {
+		return
+	}
+
+	switch packet.PacketType {
+	case Enums.PACKET_STREAM_RST:
+		c.enqueueOrphanReset(Enums.PACKET_STREAM_RST_ACK, packet.StreamID, packet.SequenceNum)
+	case Enums.PACKET_STREAM_RST_ACK:
+		return
+	default:
+		c.enqueueOrphanReset(Enums.PACKET_STREAM_RST, packet.StreamID, 0)
+	}
+}

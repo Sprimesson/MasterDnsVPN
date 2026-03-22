@@ -78,6 +78,52 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		}
 		idleTimer.Reset(20 * time.Millisecond)
 
+		if orphanPacket, ok := c.dequeueOrphanReset(); ok && orphanPacket != nil {
+			c.pingManager.NotifyPacket(orphanPacket.PacketType, false)
+
+			conns := c.selectTargetConnections(orphanPacket.PacketType, orphanPacket.StreamID)
+			if len(conns) == 0 {
+				continue
+			}
+
+			for _, conn := range conns {
+				domain := conn.Domain
+				if domain == "" {
+					domain = c.cfg.Domains[0]
+				}
+
+				opts := VpnProto.BuildOptions{
+					SessionID:     c.sessionID,
+					SessionCookie: c.sessionCookie,
+					PacketType:    orphanPacket.PacketType,
+					StreamID:      orphanPacket.StreamID,
+					SequenceNum:   orphanPacket.SequenceNum,
+				}
+
+				encoded, err := VpnProto.BuildEncodedAuto(opts, c.codec, c.cfg.CompressionMinSize)
+				if err != nil {
+					c.log.Errorf("Failed to encode orphan reset packet: %v", err)
+					continue
+				}
+
+				dnsPacket, err := buildTunnelTXTQuestion(domain, encoded)
+				if err != nil {
+					c.log.Errorf("Failed to build orphan reset DNS question: %v", err)
+					continue
+				}
+
+				select {
+				case c.txChannel <- asyncPacket{
+					conn:       conn,
+					packetType: orphanPacket.PacketType,
+					payload:    dnsPacket,
+				}:
+				default:
+				}
+			}
+			continue
+		}
+
 		c.streamsMu.RLock()
 		streamCount := len(c.active_streams)
 		if streamCount == 0 {

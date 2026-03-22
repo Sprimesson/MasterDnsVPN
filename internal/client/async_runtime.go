@@ -62,6 +62,8 @@ func (c *Client) StopAsyncRuntime() {
 	if c.pingManager != nil {
 		c.pingManager.Stop()
 	}
+
+	c.clearOrphanResets()
 }
 
 // StartAsyncRuntime initializes the parallel system for tunnel I/O and processing.

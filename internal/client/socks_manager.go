@@ -49,21 +49,23 @@ const (
 
 // HandleSOCKS5 manages the SOCKS5 handshake and specialized requests.
 func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
 
 	// 1. Greeting
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
+		_ = conn.Close()
 		return
 	}
 
 	if header[0] != SOCKS5_VERSION {
+		_ = conn.Close()
 		return
 	}
 
 	numMethods := int(header[1])
 	methods := make([]byte, numMethods)
 	if _, err := io.ReadFull(conn, methods); err != nil {
+		_ = conn.Close()
 		return
 	}
 
@@ -86,6 +88,7 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 
 	_, _ = conn.Write([]byte{SOCKS5_VERSION, methodSelected})
 	if methodSelected == SOCKS5_AUTH_METHOD_NO_ACCEPTABLE {
+		_ = conn.Close()
 		return
 	}
 
@@ -93,31 +96,38 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 	if methodSelected == SOCKS5_AUTH_METHOD_USER_PASS {
 		authHeader := make([]byte, 2)
 		if _, err := io.ReadFull(conn, authHeader); err != nil {
+			_ = conn.Close()
+			_ = conn.Close()
 			return
 		}
 		if authHeader[0] != SOCKS5_USER_AUTH_VERSION {
+			_ = conn.Close()
 			return
 		}
 
 		userLen := int(authHeader[1])
 		user := make([]byte, userLen)
 		if _, err := io.ReadFull(conn, user); err != nil {
+			_ = conn.Close()
 			return
 		}
 
 		passLenBuf := make([]byte, 1)
 		if _, err := io.ReadFull(conn, passLenBuf); err != nil {
+			_ = conn.Close()
 			return
 		}
 		passLen := int(passLenBuf[0])
 		pass := make([]byte, passLen)
 		if _, err := io.ReadFull(conn, pass); err != nil {
+			_ = conn.Close()
 			return
 		}
 
 		if string(user) != c.cfg.SOCKS5User || string(pass) != c.cfg.SOCKS5Pass {
 			_, _ = conn.Write([]byte{SOCKS5_USER_AUTH_VERSION, SOCKS5_USER_AUTH_FAILURE})
 			c.log.Warnf("🔒 <yellow>SOCKS5 Authentication failed for user: <cyan>%s</cyan></yellow>", string(user))
+			_ = conn.Close()
 			return
 		}
 		_, _ = conn.Write([]byte{SOCKS5_USER_AUTH_VERSION, SOCKS5_USER_AUTH_SUCCESS})
@@ -126,10 +136,12 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 	// 3. Request
 	reqHeader := make([]byte, 4)
 	if _, err := io.ReadFull(conn, reqHeader); err != nil {
+		_ = conn.Close()
 		return
 	}
 
 	if reqHeader[0] != SOCKS5_VERSION || reqHeader[2] != 0x00 {
+		_ = conn.Close()
 		return
 	}
 
@@ -141,32 +153,38 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 	case SOCKS5_ATYP_IPV4:
 		ip := make([]byte, 4)
 		if _, err := io.ReadFull(conn, ip); err != nil {
+			_ = conn.Close()
 			return
 		}
 		addr = net.IP(ip).String()
 	case SOCKS5_ATYP_DOMAIN:
 		lenBuf := make([]byte, 1)
 		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			_ = conn.Close()
 			return
 		}
 		domainLen := int(lenBuf[0])
 		domain := make([]byte, domainLen)
 		if _, err := io.ReadFull(conn, domain); err != nil {
+			_ = conn.Close()
 			return
 		}
 		addr = string(domain)
 	case SOCKS5_ATYP_IPV6:
 		ip := make([]byte, 16)
 		if _, err := io.ReadFull(conn, ip); err != nil {
+			_ = conn.Close()
 			return
 		}
 		addr = net.IP(ip).String()
 	default:
+		_ = conn.Close()
 		return
 	}
 
 	portBuf := make([]byte, 2)
 	if _, err := io.ReadFull(conn, portBuf); err != nil {
+		_ = conn.Close()
 		return
 	}
 	port := binary.BigEndian.Uint16(portBuf)
@@ -182,6 +200,7 @@ func (c *Client) HandleSOCKS5(ctx context.Context, conn net.Conn) {
 	}
 
 	_ = c.sendSocksReply(conn, SOCKS5_REPLY_CMD_NOT_SUPPORTED, SOCKS5_ATYP_IPV4, net.IPv4zero, 0)
+	_ = conn.Close()
 }
 
 func (c *Client) HandleSOCKS5Connect(ctx context.Context, conn net.Conn, addr string, port uint16, atyp byte) {
@@ -247,10 +266,12 @@ func (c *Client) writeSocksConnectResult(streamID uint16, rep byte) error {
 		return nil
 	}
 
+	s.stopPendingSOCKSWatch(true)
+
 	if rep == SOCKS5_REPLY_SUCCESS {
-		s.Status = "ACTIVE"
+		s.SetStatus(streamStatusActive)
 	} else {
-		s.Status = "CLOSED"
+		s.SetStatus(streamStatusSocksFailed)
 	}
 
 	return c.sendSocksReply(s.NetConn, rep, SOCKS5_ATYP_IPV4, net.IPv4zero, 0)
@@ -289,6 +310,34 @@ func (c *Client) CloseStream(streamID uint16) {
 
 	if ok && s != nil {
 		s.Close()
+	}
+}
+
+func (c *Client) removeStream(streamID uint16) {
+	c.streamsMu.Lock()
+	s, ok := c.active_streams[streamID]
+	delete(c.active_streams, streamID)
+	c.streamsMu.Unlock()
+
+	if ok && s != nil {
+		s.Close()
+	}
+}
+
+func (c *Client) handlePendingSOCKSLocalClose(streamID uint16, reason string) {
+	s, ok := c.getStream(streamID)
+	if !ok || s == nil || s.StatusValue() != streamStatusSocksConnecting {
+		return
+	}
+
+	s.SetStatus(streamStatusCancelled)
+	if s.NetConn != nil {
+		_ = s.NetConn.Close()
+	}
+
+	arqObj, err := c.getStreamARQ(streamID)
+	if err == nil {
+		arqObj.CancelPendingSOCKS(reason)
 	}
 }
 
@@ -400,14 +449,34 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 }
 
 func (c *Client) HandleSocksConnected(packet VpnProto.Packet) error {
+	s, ok := c.getStream(packet.StreamID)
+	if !ok || s == nil {
+		c.handleMissingStreamPacket(packet)
+		return nil
+	}
+
+	if ok && s != nil && s.StatusValue() == streamStatusCancelled {
+		if arqObj, err := c.getStreamARQ(packet.StreamID); err == nil {
+			arqObj.MarkSocksFailed(Enums.PACKET_STREAM_RST)
+			arqObj.SendControlPacket(Enums.PACKET_SOCKS5_CONNECTED_ACK, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, nil, Enums.DefaultPacketPriority(Enums.PACKET_SOCKS5_CONNECTED_ACK), false, nil)
+		}
+		c.removeStream(packet.StreamID)
+		return nil
+	}
+
 	if err := c.writeSocksConnectResult(packet.StreamID, SOCKS5_REPLY_SUCCESS); err != nil {
-		c.CloseStream(packet.StreamID)
+		c.handlePendingSOCKSLocalClose(packet.StreamID, "failed to write SOCKS success reply")
 		return err
 	}
 
 	arqObj, err := c.getStreamARQ(packet.StreamID)
 	if err == nil {
 		arqObj.MarkSocksConnected()
+		if s != nil {
+			for _, chunk := range s.takePendingLocalData() {
+				arqObj.InjectOutboundData(chunk)
+			}
+		}
 		arqObj.SendControlPacket(Enums.PACKET_SOCKS5_CONNECTED_ACK, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, nil, Enums.DefaultPacketPriority(Enums.PACKET_SOCKS5_CONNECTED_ACK), false, nil)
 	}
 
@@ -416,8 +485,25 @@ func (c *Client) HandleSocksConnected(packet VpnProto.Packet) error {
 }
 
 func (c *Client) HandleSocksFailure(packet VpnProto.Packet) error {
+	s, ok := c.getStream(packet.StreamID)
+	if !ok || s == nil {
+		c.handleMissingStreamPacket(packet)
+		return nil
+	}
+
+	if ok && s != nil && s.StatusValue() == streamStatusCancelled {
+		arqObj, err := c.getStreamARQ(packet.StreamID)
+		if err == nil {
+			arqObj.MarkSocksFailed(packet.PacketType)
+			ackType := packet.PacketType + 1
+			arqObj.SendControlPacket(ackType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, nil, Enums.DefaultPacketPriority(ackType), false, nil)
+		}
+		c.removeStream(packet.StreamID)
+		return nil
+	}
+
 	if err := c.writeSocksConnectResult(packet.StreamID, socksReplyForPacketType(packet.PacketType)); err != nil {
-		c.CloseStream(packet.StreamID)
+		c.handlePendingSOCKSLocalClose(packet.StreamID, "failed to write SOCKS failure reply")
 		return err
 	}
 
@@ -430,6 +516,7 @@ func (c *Client) HandleSocksFailure(packet VpnProto.Packet) error {
 	arqObj.MarkSocksFailed(packet.PacketType)
 	ackType := packet.PacketType + 1
 	arqObj.SendControlPacket(ackType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, nil, Enums.DefaultPacketPriority(ackType), false, nil)
+	c.removeStream(packet.StreamID)
 	return nil
 }
 
@@ -437,6 +524,7 @@ func (c *Client) HandleSocksControlAck(packet VpnProto.Packet) error {
 	arqObj, err := c.getStreamARQ(packet.StreamID)
 
 	if err != nil {
+		c.handleMissingStreamPacket(packet)
 		return nil
 	}
 

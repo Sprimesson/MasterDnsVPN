@@ -39,7 +39,6 @@ func buildNoDataResponseLite(packet []byte, parsed DnsParser.LitePacket) []byte 
 func isClosedStreamAwarePacketType(packetType uint8) bool {
 	switch packetType {
 	case Enums.PACKET_STREAM_SYN,
-		Enums.PACKET_SOCKS5_SYN,
 		Enums.PACKET_STREAM_DATA,
 		Enums.PACKET_STREAM_RESEND,
 		Enums.PACKET_STREAM_DATA_ACK,

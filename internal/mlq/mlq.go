@@ -74,37 +74,36 @@ func (m *MultiLevelQueue[T]) Pop(keyExtractor func(T) uint32) (T, int, bool) {
 }
 
 func (m *MultiLevelQueue[T]) popLocked(keyExtractor func(T) uint32) (T, int, bool) {
-	if m.bitmask == 0 {
-		var zero T
-		return zero, 0, false
-	}
-
-	// Optimized: Use hardware instruction to find highest priority (trailing zeros)
-	priority := bits.TrailingZeros16(m.bitmask)
-
-	q := &m.queues[priority]
-	if len(q.Items) == 0 {
-		m.bitmask &= ^(1 << uint(priority))
-		return m.popLocked(keyExtractor)
-	}
-
-	item := q.Items[0]
-
-	// Memory safety: Clear the pointer from the slice to avoid leaks if T is a pointer
 	var zero T
-	q.Items[0] = zero
-	q.Items = q.Items[1:]
+	for m.bitmask != 0 {
+		// Optimized: Use hardware instruction to find highest priority (trailing zeros)
+		priority := bits.TrailingZeros16(m.bitmask)
 
-	// Update census and bitmask
-	if keyExtractor != nil {
-		delete(m.census, keyExtractor(item))
+		q := &m.queues[priority]
+		if len(q.Items) == 0 {
+			m.bitmask &= ^(1 << uint(priority))
+			continue
+		}
+
+		item := q.Items[0]
+
+		// Memory safety: Clear the pointer from the slice to avoid leaks if T is a pointer
+		q.Items[0] = zero
+		q.Items = q.Items[1:]
+
+		// Update census and bitmask
+		if keyExtractor != nil {
+			delete(m.census, keyExtractor(item))
+		}
+
+		if len(q.Items) == 0 {
+			m.bitmask &= ^(1 << uint(priority))
+		}
+
+		return item, priority, true
 	}
 
-	if len(q.Items) == 0 {
-		m.bitmask &= ^(1 << uint(priority))
-	}
-
-	return item, priority, true
+	return zero, 0, false
 }
 
 // Get checks if an item exists in the queue using its tracking key.
@@ -147,10 +146,10 @@ func (m *MultiLevelQueue[T]) Clear(callback func(T)) {
 				callback(item)
 			}
 		}
-		// Clear slice and free memory
-		m.queues[i].Items = nil
+		clear(m.queues[i].Items)
+		m.queues[i].Items = m.queues[i].Items[:0]
 	}
-	m.census = make(map[uint32]T)
+	clear(m.census)
 	m.bitmask = 0
 }
 
@@ -225,8 +224,11 @@ func (m *MultiLevelQueue[T]) PopAnyIf(predicate func(T) bool, keyExtractor func(
 					// Found a match!
 					q.Items[i] = zero // Memory safety
 
-					// Remove from slice
-					q.Items = append(q.Items[:i], q.Items[i+1:]...)
+					// Remove from slice without append to avoid extra slice work.
+					copy(q.Items[i:], q.Items[i+1:])
+					last := len(q.Items) - 1
+					q.Items[last] = zero
+					q.Items = q.Items[:last]
 
 					if keyExtractor != nil {
 						delete(m.census, keyExtractor(item))

@@ -59,6 +59,8 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 	defer c.asyncWG.Done()
 
 	var rrCursor uint16 = 0
+	idleTimer := time.NewTimer(20 * time.Millisecond)
+	defer idleTimer.Stop()
 
 	for {
 		// Wait for signal or timeout
@@ -66,8 +68,15 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-c.txSignal:
-		case <-time.After(20 * time.Millisecond):
+		case <-idleTimer.C:
 		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(20 * time.Millisecond)
 
 		c.streamsMu.RLock()
 		streamCount := len(c.active_streams)
@@ -77,8 +86,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		}
 
 		ids := make([]uint16, 0, streamCount)
-		for id := range c.active_streams {
+		streams := make(map[uint16]*Stream_client, streamCount)
+		for id, stream := range c.active_streams {
 			ids = append(ids, id)
+			streams[id] = stream
 		}
 		c.streamsMu.RUnlock()
 
@@ -88,6 +99,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		var selected *Stream_client
 		var item *clientStreamTXPacket
 		var ok bool
+		rrApplied := false
 
 		// Start search from rrCursor
 		startIndex := -1
@@ -105,9 +117,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			idx := (startIndex + i) % len(ids)
 			id := ids[idx]
 
-			c.streamsMu.RLock()
-			s := c.active_streams[id]
-			c.streamsMu.RUnlock()
+			s := streams[id]
 
 			if s == nil || s.txQueue == nil {
 				continue
@@ -116,8 +126,34 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			// PopNextTXPacket returns the highest priority packet available for this stream.
 			item, _, ok = s.PopNextTXPacket()
 			if ok && item != nil {
+				// Mark the next RR start immediately based on the first stream that had data/ping.
+				// This ensures fairness even if we substitute a PING for another stream's data.
+				if !rrApplied {
+					rrCursor = id + 1
+					rrApplied = true
+				}
+
+				// If it's a PING from Stream 0, try to find useful data from other streams to send instead.
+				if id == 0 && item.PacketType == Enums.PACKET_PING {
+					hasOtherWork := false
+					for _, otherID := range ids {
+						if otherID == 0 {
+							continue
+						}
+						os := streams[otherID]
+						if os != nil && os.txQueue != nil && os.txQueue.Size() > 0 {
+							hasOtherWork = true
+							break
+						}
+					}
+					if hasOtherWork {
+						s.ReleaseTXPacket(item) // Drop the PING as explained in the audio
+						item = nil
+						continue // Find the next stream with real data in this round
+					}
+				}
+
 				selected = s
-				rrCursor = id + 1
 				break
 			}
 		}
@@ -161,9 +197,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 						continue
 					}
 
-					c.streamsMu.RLock()
-					otherStream := c.active_streams[sid]
-					c.streamsMu.RUnlock()
+					otherStream := streams[sid]
 
 					if otherStream == nil || otherStream.txQueue == nil {
 						continue

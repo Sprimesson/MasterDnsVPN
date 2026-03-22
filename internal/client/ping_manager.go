@@ -9,6 +9,7 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,10 +35,11 @@ type PingManager struct {
 	lastNonPingSentAt     atomic.Int64
 	lastNonPongReceivedAt atomic.Int64
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	wakeCh chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	wakeCh     chan struct{}
+	lastWokeAt atomic.Int64
 }
 
 func newPingManager(client *Client) *PingManager {
@@ -50,6 +52,7 @@ func newPingManager(client *Client) *PingManager {
 	p.lastPongReceivedAt.Store(now)
 	p.lastNonPingSentAt.Store(now)
 	p.lastNonPongReceivedAt.Store(now)
+	p.lastWokeAt.Store(now)
 	return p
 }
 
@@ -75,54 +78,64 @@ func (p *PingManager) NotifyPacket(packetType uint8, isInbound bool) {
 	if p == nil {
 		return
 	}
-	now := time.Now().UnixNano()
+
 	isPing := packetType == Enums.PACKET_PING
-	isPong := packetType == Enums.PACKET_PONG || packetType == Enums.PACKET_STREAM_DATA_ACK || packetType == Enums.PACKET_STREAM_FIN_ACK || packetType == Enums.PACKET_STREAM_RST_ACK
+	isPong := packetType == Enums.PACKET_PONG
+
+	now := time.Now().UnixNano()
 
 	if isInbound {
 		if isPong {
 			p.lastPongReceivedAt.Store(now)
 		} else {
 			p.lastNonPongReceivedAt.Store(now)
-			p.wake()
+			p.wake(now)
 		}
 	} else {
 		if isPing {
 			p.lastPingSentAt.Store(now)
 		} else {
 			p.lastNonPingSentAt.Store(now)
-			p.wake()
+			p.wake(now)
 		}
 	}
 }
 
-func (p *PingManager) wake() {
+func (p *PingManager) wake(now int64) {
+	// Throttle wakeups to at most once per 100ms to reduce CPU overhead in high traffic
+	if now-p.lastWokeAt.Load() < int64(100*time.Millisecond) {
+		return
+	}
+	p.lastWokeAt.Store(now)
 	select {
 	case p.wakeCh <- struct{}{}:
 	default:
 	}
 }
 
-func (p *PingManager) nextInterval(now time.Time) time.Duration {
-	lastNonPingSent := time.Unix(0, p.lastNonPingSentAt.Load())
-	lastNonPongRecv := time.Unix(0, p.lastNonPongReceivedAt.Load())
+func (p *PingManager) nextInterval(nowNano int64) time.Duration {
+	lastNonPingSent := p.lastNonPingSentAt.Load()
+	lastNonPongRecv := p.lastNonPongReceivedAt.Load()
 
-	// Condition: Aggressive if ANY non-ping/pong activity in last 5 seconds
-	if now.Sub(lastNonPingSent) < pingWarmThreshold || now.Sub(lastNonPongRecv) < pingWarmThreshold {
+	// Use fast int64 comparisons for intervals
+	warmThresholdNano := int64(pingWarmThreshold)
+
+	if nowNano-lastNonPingSent < warmThresholdNano || nowNano-lastNonPongRecv < warmThresholdNano {
 		return pingAggressiveInterval
 	}
 
-	idleTimeSinceSent := now.Sub(lastNonPingSent)
-	idleTimeSinceRecv := now.Sub(lastNonPongRecv)
-	minIdle := idleTimeSinceSent
-	if idleTimeSinceRecv < minIdle {
-		minIdle = idleTimeSinceRecv
+	idleSent := nowNano - lastNonPingSent
+	idleRecv := nowNano - lastNonPongRecv
+	minIdle := idleSent
+	if idleRecv < minIdle {
+		minIdle = idleRecv
 	}
 
+	coolThresholdNano := int64(pingCoolThreshold)
 	switch {
-	case minIdle < pingCoolThreshold:
+	case minIdle < coolThresholdNano:
 		return pingLazyInterval
-	case minIdle < pingCoolThreshold*2:
+	case minIdle < coolThresholdNano*2:
 		return pingCoolDownInterval
 	default:
 		return pingColdInterval
@@ -145,10 +158,11 @@ func (p *PingManager) pingLoop() {
 		}
 
 		now := time.Now()
-		interval := p.nextInterval(now)
-		lastPing := time.Unix(0, p.lastPingSentAt.Load())
+		nowNano := now.UnixNano()
+		interval := p.nextInterval(nowNano)
+		lastPing := p.lastPingSentAt.Load()
 
-		if now.Sub(lastPing) >= interval {
+		if nowNano-lastPing >= int64(interval) {
 			if p.client.SessionReady() {
 				payload, err := buildClientPingPayload()
 				if err == nil {
@@ -183,10 +197,15 @@ func (p *PingManager) pingLoop() {
 }
 
 func buildClientPingPayload() ([]byte, error) {
-	payload := []byte{'P', 'O', ':'}
-	randomPart, err := randomBytes(4)
-	if err != nil {
+	// Pre-allocate the fixed size payload to avoid multiple allocations and appends
+	payload := make([]byte, 7)
+	payload[0] = 'P'
+	payload[1] = 'O'
+	payload[2] = ':'
+
+	// Use rand.Read directly into the pre-allocated buffer starting at index 3
+	if _, err := rand.Read(payload[3:]); err != nil {
 		return nil, err
 	}
-	return append(payload, randomPart...), nil
+	return payload, nil
 }

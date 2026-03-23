@@ -11,6 +11,7 @@ package arq
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -904,6 +905,10 @@ func (a *ARQ) settleTerminalDrain() {
 }
 
 func (a *ARQ) emitTerminalPacket(packetType uint8, reason string) {
+	a.emitTerminalPacketWithTTL(packetType, reason, 0)
+}
+
+func (a *ARQ) emitTerminalPacketWithTTL(packetType uint8, reason string, ttl time.Duration) {
 	a.mu.Lock()
 	if a.closed || a.isVirtual {
 		a.mu.Unlock()
@@ -936,7 +941,7 @@ func (a *ARQ) emitTerminalPacket(packetType uint8, reason string) {
 		sn := a.sndNxt
 		a.MarkFinSent(&sn)
 		ackType := uint8(Enums.PACKET_STREAM_FIN_ACK)
-		a.SendControlPacket(Enums.PACKET_STREAM_FIN, *a.finSeqSent, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_FIN), a.enableControlReliability, &ackType)
+		a.SendControlPacketWithTTL(Enums.PACKET_STREAM_FIN, *a.finSeqSent, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_FIN), a.enableControlReliability, &ackType, ttl)
 	case Enums.PACKET_STREAM_RST:
 		if a.rstReceived || a.rstSent {
 			a.mu.Unlock()
@@ -951,7 +956,7 @@ func (a *ARQ) emitTerminalPacket(packetType uint8, reason string) {
 		sn := a.sndNxt
 		a.MarkRstSent(&sn)
 		ackType := uint8(Enums.PACKET_STREAM_RST_ACK)
-		a.SendControlPacket(Enums.PACKET_STREAM_RST, *a.rstSeqSent, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), a.enableControlReliability, &ackType)
+		a.SendControlPacketWithTTL(Enums.PACKET_STREAM_RST, *a.rstSeqSent, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), a.enableControlReliability, &ackType, ttl)
 	default:
 		a.mu.Unlock()
 	}
@@ -1231,12 +1236,31 @@ func (a *ARQ) SendControlPacketWithTTL(packetType uint8, sequenceNum uint16, fra
 }
 
 func (a *ARQ) handleTrackedPacketTTLExpiry(packetType uint8, reason string) {
-	if packetType == Enums.PACKET_STREAM_RST {
+	if isTerminalAckOwnedPacket(packetType) {
 		a.finalizeClose(reason)
 		return
 	}
 
 	a.emitTerminalPacket(Enums.PACKET_STREAM_RST, reason)
+}
+
+func isTerminalAckOwnedPacket(packetType uint8) bool {
+	switch packetType {
+	case Enums.PACKET_STREAM_RST,
+		Enums.PACKET_SOCKS5_CONNECT_FAIL,
+		Enums.PACKET_SOCKS5_RULESET_DENIED,
+		Enums.PACKET_SOCKS5_NETWORK_UNREACHABLE,
+		Enums.PACKET_SOCKS5_HOST_UNREACHABLE,
+		Enums.PACKET_SOCKS5_CONNECTION_REFUSED,
+		Enums.PACKET_SOCKS5_TTL_EXPIRED,
+		Enums.PACKET_SOCKS5_COMMAND_UNSUPPORTED,
+		Enums.PACKET_SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+		Enums.PACKET_SOCKS5_AUTH_FAILED,
+		Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *ARQ) ReceiveControlAck(ackPacketType uint8, sequenceNum uint16, fragmentID uint8) bool {
@@ -1264,6 +1288,11 @@ func (a *ARQ) ReceiveControlAck(ackPacketType uint8, sequenceNum uint16, fragmen
 		delete(a.controlSndBuf, key)
 	}
 	a.mu.Unlock()
+
+	if tracked && isTerminalAckOwnedPacket(originPtype) {
+		a.finalizeClose(fmt.Sprintf("%s acknowledged", Enums.PacketTypeName(originPtype)))
+		return true
+	}
 
 	if ackPacketType == Enums.PACKET_STREAM_FIN_ACK && isWaitingFin {
 		a.markFinAcked(sequenceNum)
@@ -1501,6 +1530,31 @@ func (a *ARQ) ForceClose(reason string) {
 	} else {
 		a.Close(reason, false)
 	}
+}
+
+func (a *ARQ) CloseStream(force bool, ttl time.Duration) {
+	if force {
+		a.ForceClose("Force close requested")
+		return
+	}
+
+	a.mu.Lock()
+	alreadyTerminal := a.closed || a.waitingAck || a.deferredClose ||
+		a.state == StateClosing || a.state == StateDraining || a.state == StateTimeWait ||
+		a.state == StateReset || a.finSent || a.rstSent || a.rstReceived
+	a.mu.Unlock()
+
+	if alreadyTerminal {
+		a.ForceClose("Forced close after repeated close request")
+		return
+	}
+
+	if ttl <= 0 {
+		a.Abort("Close stream requested", true)
+		return
+	}
+
+	a.emitTerminalPacketWithTTL(Enums.PACKET_STREAM_RST, "Close stream requested", ttl)
 }
 
 // Done returns a channel that is closed when the ARQ context is cancelled or the stream is closed.

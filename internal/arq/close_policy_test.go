@@ -289,3 +289,91 @@ func TestRSTPacketTTLExpiryHardClosesStream(t *testing.T) {
 		return a.IsClosed()
 	}, "expected TTL-expired RST packet to hard-close stream")
 }
+
+func TestSocksFailureAckClosesStream(t *testing.T) {
+	enq := &recordingEnqueuer{}
+	a := NewARQ(10, 1, enq, nil, 1200, nil, Config{
+		IsClient:                 false,
+		WindowSize:               64,
+		RTO:                      0.05,
+		MaxRTO:                   0.2,
+		EnableControlReliability: true,
+		ControlRTO:               0.05,
+		ControlMaxRTO:            0.2,
+		ControlMaxRetries:        10,
+	})
+	a.Start()
+
+	if !a.SendControlPacketWithTTL(Enums.PACKET_SOCKS5_CONNECT_FAIL, 0, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_SOCKS5_CONNECT_FAIL), true, nil, time.Second) {
+		t.Fatal("expected SOCKS failure packet to be queued")
+	}
+
+	if !a.HandleAckPacket(Enums.PACKET_SOCKS5_CONNECT_FAIL_ACK, 0, 0) {
+		t.Fatal("expected SOCKS failure ACK to be consumed")
+	}
+
+	waitUntil(t, time.Second, func() bool {
+		return a.IsClosed()
+	}, "expected ACKed SOCKS failure packet to close stream")
+}
+
+func TestSocksFailureTTLExpiryHardClosesStream(t *testing.T) {
+	enq := &recordingEnqueuer{}
+	a := NewARQ(11, 1, enq, nil, 1200, nil, Config{
+		IsClient:                 false,
+		WindowSize:               64,
+		RTO:                      0.05,
+		MaxRTO:                   0.2,
+		EnableControlReliability: true,
+		ControlRTO:               0.05,
+		ControlMaxRTO:            0.2,
+		ControlMaxRetries:        10,
+	})
+	a.Start()
+
+	if !a.SendControlPacketWithTTL(Enums.PACKET_SOCKS5_CONNECT_FAIL, 0, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_SOCKS5_CONNECT_FAIL), true, nil, 50*time.Millisecond) {
+		t.Fatal("expected SOCKS failure packet with TTL to be queued")
+	}
+
+	waitUntil(t, time.Second, func() bool {
+		return a.IsClosed()
+	}, "expected TTL-expired SOCKS failure packet to hard-close stream")
+}
+
+func TestCloseStreamWithTTLQueuesRST(t *testing.T) {
+	enq := &recordingEnqueuer{}
+	a := NewARQ(8, 1, enq, nil, 1200, nil, Config{
+		IsClient:                 false,
+		WindowSize:               64,
+		RTO:                      0.05,
+		MaxRTO:                   0.2,
+		EnableControlReliability: true,
+	})
+	a.Start()
+	defer a.ForceClose("test cleanup")
+
+	a.CloseStream(false, 30*time.Second)
+
+	waitUntil(t, time.Second, func() bool {
+		return enq.has(Enums.PACKET_STREAM_RST)
+	}, "expected CloseStream(ttl) to send terminal RST")
+}
+
+func TestRepeatedCloseStreamForcesClose(t *testing.T) {
+	enq := &recordingEnqueuer{}
+	a := NewARQ(9, 1, enq, nil, 1200, nil, Config{
+		IsClient:                 false,
+		WindowSize:               64,
+		RTO:                      0.05,
+		MaxRTO:                   0.2,
+		EnableControlReliability: true,
+	})
+	a.Start()
+
+	a.CloseStream(false, 30*time.Second)
+	a.CloseStream(false, 30*time.Second)
+
+	waitUntil(t, time.Second, func() bool {
+		return a.IsClosed()
+	}, "expected repeated close request to escalate to force close")
+}

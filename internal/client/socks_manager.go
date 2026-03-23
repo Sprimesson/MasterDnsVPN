@@ -327,14 +327,16 @@ func socksReplyForPacketType(packetType uint8) byte {
 	}
 }
 
-func (c *Client) CloseStream(streamID uint16) {
+func (c *Client) CloseStream(streamID uint16, force bool, ttl time.Duration) {
 	c.streamsMu.Lock()
 	s, ok := c.active_streams[streamID]
-	delete(c.active_streams, streamID)
+	if force {
+		delete(c.active_streams, streamID)
+	}
 	c.streamsMu.Unlock()
 
 	if ok {
-		s.Close()
+		s.CloseStream(force, ttl)
 	}
 }
 

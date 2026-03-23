@@ -99,33 +99,44 @@ func (s *Stream_server) PushTXPacket(priority int, packetType uint8, sequenceNum
 }
 
 func (s *Stream_server) Close(reason string) {
-	s.mu.Lock()
-	if s.Status == "CLOSED" {
-		s.mu.Unlock()
-		return
-	}
-	s.Status = "CLOSED"
-	s.CloseTime = time.Now()
-	s.mu.Unlock()
-
-	if s.ARQ != nil {
-		s.ARQ.Close(reason, true)
-	}
+	s.CloseStream(false, 0, reason)
 }
 
 func (s *Stream_server) Abort(reason string) {
+	s.CloseStream(false, 0, reason)
+}
+
+func (s *Stream_server) cleanupResources() {
 	s.mu.Lock()
-	if s.Status == "CLOSED" {
-		s.mu.Unlock()
-		return
-	}
 	s.Status = "CLOSED"
 	s.CloseTime = time.Now()
 	s.mu.Unlock()
 
-	if s.ARQ != nil {
-		s.ARQ.Abort(reason, true)
+	if s.UpstreamConn != nil {
+		_ = s.UpstreamConn.Close()
+		s.UpstreamConn = nil
 	}
+	if s.TXQueue != nil {
+		s.TXQueue.Clear(func(pkt *serverStreamTXPacket) {
+			putTXPacketToPool(pkt)
+		})
+	}
+}
+
+func (s *Stream_server) CloseStream(force bool, ttl time.Duration, reason string) {
+	if s == nil {
+		return
+	}
+
+	if s.ARQ != nil {
+		s.ARQ.CloseStream(force, ttl)
+		if force {
+			s.cleanupResources()
+		}
+		return
+	}
+
+	s.cleanupResources()
 }
 
 func (s *Server) collectStreamDataFragments(packet VpnProto.Packet, now time.Time) ([]byte, bool, bool) {

@@ -243,32 +243,48 @@ func (s *Stream_client) GetQueuedPacket(packetType uint8, sequenceNum uint16, fr
 	return s.txQueue.Get(key)
 }
 
-// Close gracefully shuts down the stream and releases all resources.
-func (s *Stream_client) Close() {
+func (s *Stream_client) cleanupResources() {
 	s.stopPendingSOCKSWatch(false)
 
-	// 1. Close the ARQ object if it exists
-	if s.Stream != nil {
-		if a, ok := s.Stream.(*arq.ARQ); ok {
-			a.Close("Stream_client.Close called", false)
-		}
-	}
-
-	// 2. Close the network connection
 	if s.NetConn != nil {
 		_ = s.NetConn.Close()
 	}
 
-	// 3. Clear the TX queue and return all packets to the pool (Safety)
 	if s.txQueue != nil {
 		s.txQueue.Clear(func(p *clientStreamTXPacket) {
 			s.ReleaseTXPacket(p)
 		})
 	}
 
-	// 4. Clear inbound buffer
 	s.PendingInboundData = nil
 	s.SetStatus(streamStatusClosed)
+}
+
+// Close gracefully shuts down the stream and releases all resources.
+func (s *Stream_client) Close() {
+	if s.Stream != nil {
+		if a, ok := s.Stream.(*arq.ARQ); ok {
+			a.ForceClose("Stream_client.Close cleanup")
+		}
+	}
+	s.cleanupResources()
+}
+
+func (s *Stream_client) CloseStream(force bool, ttl time.Duration) {
+	if s == nil {
+		return
+	}
+
+	s.stopPendingSOCKSWatch(false)
+	if a, ok := s.Stream.(*arq.ARQ); ok && a != nil {
+		a.CloseStream(force, ttl)
+		if force {
+			s.cleanupResources()
+		}
+		return
+	}
+
+	s.cleanupResources()
 }
 
 // ReleaseTXPacket returns a packet to the pool.

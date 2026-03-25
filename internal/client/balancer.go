@@ -200,6 +200,38 @@ func (b *Balancer) GetBestConnection() (Connection, bool) {
 	}
 }
 
+func (b *Balancer) GetBestConnectionExcluding(excludeKey string) (Connection, bool) {
+	snap := b.snapshot.Load()
+	if snap == nil || len(snap.valid) == 0 {
+		return Connection{}, false
+	}
+
+	switch b.strategy {
+	case BalancingRandom:
+		ordered := b.rotatedValidIndices(snap, 1)
+		for _, idx := range ordered {
+			conn, ok := derefConnection(snap.connections, idx)
+			if !ok || conn.Key == excludeKey {
+				continue
+			}
+			return conn, true
+		}
+		return Connection{}, false
+	case BalancingLeastLoss:
+		if !b.hasLossSignal(snap) {
+			return b.roundRobinBestConnectionExcluding(snap, excludeKey)
+		}
+		return b.bestScoredConnectionExcluding(snap, b.lossScore, excludeKey)
+	case BalancingLowestLatency:
+		if !b.hasLatencySignal(snap) {
+			return b.roundRobinBestConnectionExcluding(snap, excludeKey)
+		}
+		return b.bestScoredConnectionExcluding(snap, b.latencyScore, excludeKey)
+	default:
+		return b.roundRobinBestConnectionExcluding(snap, excludeKey)
+	}
+}
+
 func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
 	snap := b.snapshot.Load()
 	if snap == nil {
@@ -390,6 +422,27 @@ func (b *Balancer) bestScoredConnection(snap *balancerSnapshot, scorer func(*bal
 	return derefConnection(snap.connections, bestIndex)
 }
 
+func (b *Balancer) bestScoredConnectionExcluding(snap *balancerSnapshot, scorer func(*balancerSnapshot, int) uint64, excludeKey string) (Connection, bool) {
+	ordered := b.rotatedValidIndices(snap, 1)
+	bestIndex := -1
+	var bestScore uint64
+	for _, idx := range ordered {
+		conn, ok := derefConnection(snap.connections, idx)
+		if !ok || conn.Key == excludeKey {
+			continue
+		}
+		score := scorer(snap, idx)
+		if bestIndex == -1 || score < bestScore {
+			bestIndex = idx
+			bestScore = score
+		}
+	}
+	if bestIndex < 0 {
+		return Connection{}, false
+	}
+	return derefConnection(snap.connections, bestIndex)
+}
+
 func derefConnection(connections []*Connection, idx int) (Connection, bool) {
 	if idx < 0 || idx >= len(connections) || connections[idx] == nil {
 		return Connection{}, false
@@ -433,6 +486,21 @@ func (b *Balancer) roundRobinBestConnection(snap *balancerSnapshot) (Connection,
 	}
 	pos := int(b.rrCounter.Add(1)-1) % len(snap.valid)
 	return derefConnection(snap.connections, snap.valid[pos])
+}
+
+func (b *Balancer) roundRobinBestConnectionExcluding(snap *balancerSnapshot, excludeKey string) (Connection, bool) {
+	if snap == nil || len(snap.valid) == 0 {
+		return Connection{}, false
+	}
+	ordered := b.rotatedValidIndices(snap, 1)
+	for _, idx := range ordered {
+		conn, ok := derefConnection(snap.connections, idx)
+		if !ok || conn.Key == excludeKey {
+			continue
+		}
+		return conn, true
+	}
+	return Connection{}, false
 }
 
 func (b *Balancer) rotatedValidIndices(snap *balancerSnapshot, step int) []int {

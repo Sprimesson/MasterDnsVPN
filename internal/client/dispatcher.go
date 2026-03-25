@@ -17,39 +17,11 @@ import (
 )
 
 func (c *Client) selectTargetConnections(packetType uint8, streamID uint16) []Connection {
-	targetCount := c.cfg.PacketDuplicationCount
-	if targetCount < 1 {
-		targetCount = 1
-	}
-
-	// SYN packets often use higher duplication for reliability during handshake
-	if packetType == Enums.PACKET_STREAM_SYN || packetType == Enums.PACKET_SOCKS5_SYN {
-		if c.cfg.SetupPacketDuplicationCount > targetCount {
-			targetCount = c.cfg.SetupPacketDuplicationCount
-		}
-	}
-
-	// If duplication is disabled, just return the best connection (preferred if possible)
-	if targetCount <= 1 {
-		if streamID > 0 {
-			c.streamsMu.RLock()
-			s := c.active_streams[streamID]
-			c.streamsMu.RUnlock()
-			if s != nil && s.PreferredServerKey != "" {
-				if idx, ok := c.connectionsByKey[s.PreferredServerKey]; ok {
-					return []Connection{c.connections[idx]}
-				}
-			}
-		}
-		best, ok := c.balancer.GetBestConnection()
-		if ok {
-			return []Connection{best}
-		}
+	connections, err := c.selectTargetConnectionsForPacket(packetType, streamID)
+	if err != nil {
 		return nil
 	}
-
-	// For multiple packets, use unique connections from balancer
-	return c.balancer.GetUniqueConnections(targetCount)
+	return connections
 }
 
 // asyncStreamDispatcher cycles through all active streams using a fair Round-Robin algorithm
@@ -62,6 +34,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 	idleTimer := time.NewTimer(20 * time.Millisecond)
 	defer idleTimer.Stop()
 
+dispatchLoop:
 	for {
 		c.streamsMu.RLock()
 		streamCount := len(c.active_streams)
@@ -210,6 +183,17 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			}
 			idleTimer.Reset(20 * time.Millisecond)
 			continue
+		}
+
+		if selected != nil &&
+			(item.PacketType == Enums.PACKET_STREAM_DATA || item.PacketType == Enums.PACKET_STREAM_RESEND) &&
+			!c.shouldTransmitQueuedStreamPacket(selected, item) {
+			selected.ReleaseTXPacket(item)
+			select {
+			case c.txSignal <- struct{}{}:
+			default:
+			}
+			continue dispatchLoop
 		}
 
 		var finalPacket asyncPacket

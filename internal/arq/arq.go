@@ -214,6 +214,13 @@ func (a *ARQ) State() StreamState {
 	return a.state
 }
 
+func (a *ARQ) HasPendingSequence(sn uint16) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.sndBuf[sn]
+	return ok
+}
+
 // NewARQ instantiates a pristine reliable streaming overlay suitable for client or server
 func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn io.ReadWriteCloser, mtu int, logger Logger, cfg Config) *ARQ {
 	if logger == nil {

@@ -96,11 +96,6 @@ func (c *Client) Log() *logger.Logger {
 	return c.log
 }
 
-// initResolverRecheckMeta initializes metadata for resolver health monitoring.
-func (c *Client) initResolverRecheckMeta() {
-	// Recheck logic not fully implemented yet
-}
-
 // connectionPtrByKey returns a pointer to a Connection object based on its unique key.
 func (c *Client) connectionPtrByKey(key string) *Connection {
 	if idx, ok := c.connectionsByKey[key]; ok {
@@ -202,6 +197,9 @@ func (c *Client) consumeInboundStreamAck(packetType uint8, packet VpnProto.Packe
 	}
 
 	handledAck := arqObj.HandleAckPacket(packet.PacketType, packet.SequenceNum, packet.FragmentID)
+	if handledAck {
+		c.noteStreamProgress(packet.StreamID)
+	}
 
 	if _, ok := Enums.GetPacketCloseStream(packet.PacketType); handledAck && ok {
 		if s.StatusValue() == streamStatusCancelled || arqObj.IsClosed() {

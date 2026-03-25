@@ -52,26 +52,28 @@ type Client struct {
 	resolverPending  map[resolverSampleKey]resolverSample
 
 	// MTU States
-	syncedUploadMTU           int
-	syncedDownloadMTU         int
-	syncedUploadChars         int
-	safeUploadMTU             int
-	maxPackedBlocks           int
-	uploadCompression         uint8
-	downloadCompression       uint8
-	mtuCryptoOverhead         int
-	mtuProbeCounter           atomic.Uint32
-	mtuTestRetries            int
-	mtuTestTimeout            time.Duration
-	mtuSaveToFile             bool
-	mtuServersFileName        string
-	mtuServersFileFormat      string
-	mtuSuccessOutputPath      string
-	mtuOutputMu               sync.Mutex
-	mtuUsageSeparatorWritten  bool
-	mtuUsingSeparatorText     string
-	mtuRemovedServerLogFormat string
-	mtuAddedServerLogFormat   string
+	syncedUploadMTU                       int
+	syncedDownloadMTU                     int
+	syncedUploadChars                     int
+	safeUploadMTU                         int
+	maxPackedBlocks                       int
+	uploadCompression                     uint8
+	downloadCompression                   uint8
+	mtuCryptoOverhead                     int
+	mtuProbeCounter                       atomic.Uint32
+	mtuTestRetries                        int
+	mtuTestTimeout                        time.Duration
+	mtuSaveToFile                         bool
+	mtuServersFileName                    string
+	mtuServersFileFormat                  string
+	mtuSuccessOutputPath                  string
+	mtuOutputMu                           sync.Mutex
+	mtuUsageSeparatorWritten              bool
+	mtuUsingSeparatorText                 string
+	mtuRemovedServerLogFormat             string
+	mtuAddedServerLogFormat               string
+	streamResolverFailoverResendThreshold int
+	streamResolverFailoverCooldown        time.Duration
 
 	// Session States
 	sessionID           uint8
@@ -208,16 +210,18 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 				return make([]byte, RuntimeUDPReadBufferSize)
 			},
 		},
-		resolverConns:             make(map[string]chan *net.UDPConn),
-		resolverPending:           make(map[resolverSampleKey]resolverSample),
-		mtuTestRetries:            cfg.MTUTestRetries,
-		mtuTestTimeout:            time.Duration(cfg.MTUTestTimeout * float64(time.Second)),
-		mtuSaveToFile:             cfg.SaveMTUServersToFile,
-		mtuServersFileName:        cfg.MTUServersFileName,
-		mtuServersFileFormat:      cfg.MTUServersFileFormat,
-		mtuUsingSeparatorText:     cfg.MTUUsingSeparatorText,
-		mtuRemovedServerLogFormat: cfg.MTURemovedServerLogFormat,
-		mtuAddedServerLogFormat:   cfg.MTUAddedServerLogFormat,
+		resolverConns:                         make(map[string]chan *net.UDPConn),
+		resolverPending:                       make(map[resolverSampleKey]resolverSample),
+		mtuTestRetries:                        cfg.MTUTestRetries,
+		mtuTestTimeout:                        time.Duration(cfg.MTUTestTimeout * float64(time.Second)),
+		mtuSaveToFile:                         cfg.SaveMTUServersToFile,
+		mtuServersFileName:                    cfg.MTUServersFileName,
+		mtuServersFileFormat:                  cfg.MTUServersFileFormat,
+		mtuUsingSeparatorText:                 cfg.MTUUsingSeparatorText,
+		mtuRemovedServerLogFormat:             cfg.MTURemovedServerLogFormat,
+		mtuAddedServerLogFormat:               cfg.MTUAddedServerLogFormat,
+		streamResolverFailoverResendThreshold: cfg.StreamResolverFailoverResendThreshold,
+		streamResolverFailoverCooldown:        time.Duration(cfg.StreamResolverFailoverCooldownSec * float64(time.Second)),
 
 		// Workers config
 		tunnelReaderWorkers:  cfg.TunnelReaderWorkers,
@@ -242,6 +246,15 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		orphanQueue:            mlq.New[VpnProto.Packet](cfg.OrphanQueueInitialCapacity),
 		sessionResetSignal:     make(chan struct{}, 1),
 	}
+
+	if c.streamResolverFailoverResendThreshold < 1 {
+		c.streamResolverFailoverResendThreshold = 1
+	}
+
+	if c.streamResolverFailoverCooldown <= 0 {
+		c.streamResolverFailoverCooldown = time.Second
+	}
+
 	c.pingManager = newPingManager(c)
 	return c
 }
@@ -407,6 +420,9 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 		}
 	default:
 		handledAck := arqObj.HandleAckPacket(packet.PacketType, packet.SequenceNum, packet.FragmentID)
+		if handledAck {
+			c.noteStreamProgress(packet.StreamID)
+		}
 		if _, ok := Enums.GetPacketCloseStream(packet.PacketType); handledAck && ok {
 			if s.StatusValue() == streamStatusCancelled || arqObj.IsClosed() {
 				s.MarkTerminal(time.Now())

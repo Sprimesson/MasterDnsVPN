@@ -62,6 +62,7 @@ type Stream_client struct {
 	LastResolverFailoverAt time.Time
 	HandshakeLastProgress  time.Time
 
+	resolverMu    sync.Mutex
 	txQueueMu     sync.Mutex
 	statusMu      sync.RWMutex
 	terminalSince time.Time
@@ -161,6 +162,10 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 
 	if conn != nil && streamID != 0 && c.cfg.ProtocolType == "SOCKS5" {
 		s.SetStatus(streamStatusSocksConnecting)
+	}
+
+	if streamID != 0 {
+		c.ensureStreamPreferredConnection(s)
 	}
 
 	return s

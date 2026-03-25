@@ -25,6 +25,7 @@ var txPacketPool = sync.Pool{
 
 const (
 	streamStatusPending         = "PENDING"
+	streamStatusConnecting      = "CONNECTING"
 	streamStatusSocksConnecting = "SOCKS_CONNECTING"
 	streamStatusActive          = "ACTIVE"
 	streamStatusDraining        = "DRAINING"
@@ -135,7 +136,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		WindowSize:               c.cfg.ARQWindowSize,
 		RTO:                      c.cfg.ARQInitialRTOSeconds,
 		MaxRTO:                   c.cfg.ARQMaxRTOSeconds,
-		StartPaused:              conn != nil && streamID != 0 && c.cfg.ProtocolType == "SOCKS5",
+		StartPaused:              conn != nil && streamID != 0 && (c.cfg.ProtocolType == "SOCKS5" || c.cfg.ProtocolType == "TCP"),
 		EnableControlReliability: true,
 		ControlRTO:               c.cfg.ARQControlInitialRTOSeconds,
 		ControlMaxRTO:            c.cfg.ARQControlMaxRTOSeconds,
@@ -160,8 +161,13 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 	c.active_streams[streamID] = s
 	c.streamsMu.Unlock()
 
-	if conn != nil && streamID != 0 && c.cfg.ProtocolType == "SOCKS5" {
-		s.SetStatus(streamStatusSocksConnecting)
+	if conn != nil && streamID != 0 {
+		switch c.cfg.ProtocolType {
+		case "SOCKS5":
+			s.SetStatus(streamStatusSocksConnecting)
+		case "TCP":
+			s.SetStatus(streamStatusConnecting)
+		}
 	}
 
 	if streamID != 0 {

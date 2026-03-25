@@ -16,6 +16,10 @@ import (
 )
 
 func (s *Server) handlePostSessionPacket(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
+	if s.rejectProtocolMismatchedSyn(vpnPacket.PacketType) {
+		return false
+	}
+
 	if handled := s.preprocessInboundPacket(vpnPacket); handled {
 		return true
 	}
@@ -137,7 +141,7 @@ func (s *Server) queueImmediateControlAck(record *sessionRecord, packet VpnProto
 
 	stream, exists := record.getStream(packet.StreamID)
 	if (!exists || stream == nil) && isStreamCreationPacketType(packet.PacketType) {
-		stream = record.getOrCreateStream(packet.StreamID, s.streamARQConfig(packet.PacketType == Enums.PACKET_SOCKS5_SYN, record.DownloadCompression), nil, s.log)
+		stream = record.getOrCreateStream(packet.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
 		exists = stream != nil
 	}
 
@@ -214,6 +218,10 @@ func (s *Server) handlePackedControlBlocksRequest(vpnPacket VpnProto.Packet, ses
 	sawBlock := false
 	VpnProto.ForEachPackedControlBlock(vpnPacket.Payload, func(packetType uint8, streamID uint16, sequenceNum uint16, fragmentID uint8, totalFragments uint8) bool {
 		if packetType == Enums.PACKET_PACKED_CONTROL_BLOCKS {
+			return true
+		}
+
+		if s.rejectProtocolMismatchedSyn(packetType) {
 			return true
 		}
 
@@ -312,6 +320,21 @@ func (s *Server) handleStreamSynRequest(vpnPacket VpnProto.Packet, sessionRecord
 	}
 
 	return true
+}
+
+func (s *Server) rejectProtocolMismatchedSyn(packetType uint8) bool {
+	if s == nil {
+		return false
+	}
+
+	switch s.cfg.ProtocolType {
+	case "TCP":
+		return packetType == Enums.PACKET_SOCKS5_SYN
+	case "SOCKS5":
+		return packetType == Enums.PACKET_STREAM_SYN
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleSOCKS5SynRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {

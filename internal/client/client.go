@@ -415,6 +415,10 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 	switch packet.PacketType {
 	case Enums.PACKET_STREAM_DATA, Enums.PACKET_STREAM_RESEND:
 		arqObj.ReceiveData(packet.SequenceNum, packet.Payload)
+	case Enums.PACKET_STREAM_CONNECTED:
+		return c.handleStreamConnected(packet, s, arqObj)
+	case Enums.PACKET_STREAM_CONNECT_FAIL:
+		return c.handleStreamConnectFail(packet, s, arqObj)
 	case Enums.PACKET_STREAM_FIN:
 		arqObj.MarkFinReceived()
 	case Enums.PACKET_STREAM_RST:

@@ -10,6 +10,7 @@ package udpserver
 import (
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,49 +54,88 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 		return
 	}
 
-	if VpnProto.IsTCPForwardSynPayload(vpnPacket.Payload) {
-		if s.cfg.ForwardIP == "" || s.cfg.ForwardPort <= 0 {
+	if s.cfg.ForwardIP == "" || s.cfg.ForwardPort <= 0 {
+		stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+		if stream == nil || stream.ARQ == nil {
 			record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 			return
 		}
 
-		record.StreamsMu.RLock()
-		existing, ok := record.Streams[vpnPacket.StreamID]
-		record.StreamsMu.RUnlock()
-
-		if ok && existing != nil && existing.Connected && existing.TargetHost == s.cfg.ForwardIP && existing.TargetPort == uint16(s.cfg.ForwardPort) {
-			if s.log != nil {
-				s.log.Debugf("🧦 <green>STREAM_SYN Fast-Ack (Existing), Session: <cyan>%d</cyan> | Stream: <cyan>%d</cyan></green>", vpnPacket.SessionID, vpnPacket.StreamID)
-			}
-			return
-		}
-
-		if s.log != nil {
-			s.log.Debugf("🧦 <blue>STREAM_SYN Processing, Session: <cyan>%d</cyan> | Stream: <cyan>%d</cyan> | Forwarding</blue>", vpnPacket.SessionID, vpnPacket.StreamID)
-		}
-
-		stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(false, record.DownloadCompression), nil, s.log)
-		upstreamConn, err := s.dialSOCKSStreamTarget(s.cfg.ForwardIP, uint16(s.cfg.ForwardPort), nil)
-		if err != nil {
-			_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
-				PacketType:  Enums.PACKET_STREAM_RST,
-				StreamID:    vpnPacket.StreamID,
-				SequenceNum: vpnPacket.SequenceNum,
-			})
-			return
-		}
-
-		stream.mu.Lock()
-		stream.UpstreamConn = upstreamConn
-		stream.TargetHost = s.cfg.ForwardIP
-		stream.TargetPort = uint16(s.cfg.ForwardPort)
-		stream.Connected = true
-		stream.mu.Unlock()
-
-		stream.ARQ.SetLocalConn(upstreamConn)
-	} else {
-		record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(false, record.DownloadCompression), nil, s.log)
+		stream.ARQ.SendControlPacketWithTTL(
+			Enums.PACKET_STREAM_CONNECT_FAIL,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECT_FAIL),
+			true,
+			nil,
+			s.cfg.StreamFailurePacketTTL(),
+		)
+		return
 	}
+
+	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+	if stream == nil || stream.ARQ == nil {
+		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
+		return
+	}
+
+	stream.mu.RLock()
+	alreadyConnected := stream.Connected && stream.TargetHost == s.cfg.ForwardIP && stream.TargetPort == uint16(s.cfg.ForwardPort)
+	stream.mu.RUnlock()
+	if alreadyConnected {
+		stream.ARQ.SendControlPacketWithTTL(
+			Enums.PACKET_STREAM_CONNECTED,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECTED),
+			true,
+			nil,
+			s.cfg.StreamResultPacketTTL(),
+		)
+		return
+	}
+
+	upstreamConn, err := s.dialTCPTarget(net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
+	if err != nil {
+		stream.ARQ.SendControlPacketWithTTL(
+			Enums.PACKET_STREAM_CONNECT_FAIL,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECT_FAIL),
+			true,
+			nil,
+			s.cfg.StreamFailurePacketTTL(),
+		)
+		return
+	}
+
+	stream.mu.Lock()
+	stream.UpstreamConn = upstreamConn
+	stream.TargetHost = s.cfg.ForwardIP
+	stream.TargetPort = uint16(s.cfg.ForwardPort)
+	stream.Connected = true
+	stream.Status = "CONNECTED"
+	stream.mu.Unlock()
+
+	stream.ARQ.SetLocalConn(upstreamConn)
+	stream.ARQ.SendControlPacketWithTTL(
+		Enums.PACKET_STREAM_CONNECTED,
+		vpnPacket.SequenceNum,
+		0,
+		0,
+		nil,
+		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECTED),
+		true,
+		nil,
+		s.cfg.StreamResultPacketTTL(),
+	)
+	stream.ARQ.SetIOReady(true)
 }
 
 func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
@@ -124,7 +164,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 		return
 	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(true, record.DownloadCompression), nil, s.log)
+	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
 	target, err := SocksProto.ParseTargetPayload(assembledTarget)
 	if err != nil {
 		packetType := uint8(Enums.PACKET_SOCKS5_CONNECT_FAIL)

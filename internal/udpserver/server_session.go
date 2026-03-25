@@ -180,12 +180,11 @@ func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) boo
 	return stream.PushTXPacket(getEffectivePriority(packet.PacketType, 3), packet.PacketType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, packet.CompressionType, 0, packet.Payload)
 }
 
-func (s *Server) streamARQConfig(isSocks bool, compressionType uint8) arq.Config {
+func (s *Server) streamARQConfig(compressionType uint8) arq.Config {
 	return arq.Config{
 		WindowSize:               s.cfg.ARQWindowSize,
 		RTO:                      s.cfg.ARQInitialRTOSeconds,
 		MaxRTO:                   s.cfg.ARQMaxRTOSeconds,
-		StartPaused:              isSocks,
 		EnableControlReliability: true,
 		ControlRTO:               s.cfg.ARQControlInitialRTOSeconds,
 		ControlMaxRTO:            s.cfg.ARQControlMaxRTOSeconds,

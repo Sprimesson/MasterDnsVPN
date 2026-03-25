@@ -15,6 +15,12 @@
 # Must match client DOMAINS.
 DOMAIN = ["v.domain.com"]
 
+# Which setup protocol this server accepts for new stream creation.
+# Allowed values:
+# "SOCKS5" = accept only PACKET_SOCKS5_SYN
+# "TCP"    = accept only PACKET_STREAM_SYN
+PROTOCOL_TYPE = "SOCKS5"
+
 # Compression types the server allows the client to request.
 # Allowed values:
 # 0 = OFF
@@ -143,8 +149,10 @@ DNS_CACHE_TTL_SECONDS = 300.0
 # ------------------------------------------------------------------------------
 # 6) Upstream SOCKS / Forwarding
 # What this section does:
-# - Controls how the server opens outbound connections for client streams.
-# - Either direct-connects to targets or chains through an external SOCKS5 proxy.
+# - Controls how the server opens outbound connections for accepted client streams.
+# - In SOCKS5 mode, targets come from the client's SOCKS target payload.
+# - In TCP mode, STREAM_SYN is payload-less and the server connects to FORWARD_IP:FORWARD_PORT.
+# - External SOCKS5 chaining is only used for SOCKS5 target connects.
 # ------------------------------------------------------------------------------
 
 # Timeout for outbound connect attempts made by the server.
@@ -159,8 +167,8 @@ SOCKS5_AUTH = false
 SOCKS5_USER = "admin"
 SOCKS5_PASS = "123456"
 
-# External SOCKS5 endpoint.
-# Leave FORWARD_IP empty when USE_EXTERNAL_SOCKS5=false.
+# Fixed upstream endpoint for TCP mode, and external SOCKS5 endpoint when
+# USE_EXTERNAL_SOCKS5=true in SOCKS5 mode.
 FORWARD_IP = ""
 FORWARD_PORT = 0
 

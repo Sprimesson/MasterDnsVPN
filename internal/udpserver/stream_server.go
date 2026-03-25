@@ -50,7 +50,7 @@ func NewStreamServer(streamID uint16, sessionID uint8, arqConfig arq.Config, loc
 		ID:           streamID,
 		SessionID:    sessionID,
 		TXQueue:      mlq.New[*serverStreamTXPacket](queueInitialCapacity),
-		Status:       "CONNECTED",
+		Status:       "PENDING",
 		CreatedAt:    time.Now(),
 		LastActivity: time.Now(),
 	}

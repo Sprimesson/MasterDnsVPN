@@ -79,6 +79,5 @@ func (l *TCPListener) handleConnection(ctx context.Context, conn net.Conn, proto
 		return
 	}
 
-	// Placeholder for other protocols
-	_ = conn.Close()
+	l.client.HandleTCPConnect(ctx, conn)
 }

@@ -64,7 +64,7 @@ func (c *Client) initResolverRecheckMeta() {
 
 	for idx := range c.connections {
 		conn := &c.connections[idx]
-		if conn == nil || conn.Key == "" {
+		if conn.Key == "" {
 			continue
 		}
 		c.resolverHealth[conn.Key] = &resolverHealthState{

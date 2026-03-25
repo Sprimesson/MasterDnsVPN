@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -22,6 +23,7 @@ import (
 type ServerConfig struct {
 	ConfigDir                         string   `toml:"-"`
 	ConfigPath                        string   `toml:"-"`
+	ProtocolType                      string   `toml:"PROTOCOL_TYPE"`
 	UDPHost                           string   `toml:"UDP_HOST"`
 	UDPPort                           int      `toml:"UDP_PORT"`
 	UDPReaders                        int      `toml:"UDP_READERS"`
@@ -90,6 +92,7 @@ func defaultServerConfig() ServerConfig {
 	readers := min(max(runtime.NumCPU()/2, 1), 4)
 
 	return ServerConfig{
+		ProtocolType:                      "SOCKS5",
 		UDPHost:                           "0.0.0.0",
 		UDPPort:                           53,
 		UDPReaders:                        readers,
@@ -170,6 +173,13 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 
 	cfg.ConfigPath = path
 	cfg.ConfigDir = filepath.Dir(path)
+	cfg.ProtocolType = defaultString(strings.ToUpper(strings.TrimSpace(cfg.ProtocolType)), "SOCKS5")
+
+	switch cfg.ProtocolType {
+	case "SOCKS5", "TCP":
+	default:
+		return cfg, fmt.Errorf("invalid PROTOCOL_TYPE: %q", cfg.ProtocolType)
+	}
 
 	if cfg.UDPHost == "" {
 		cfg.UDPHost = "0.0.0.0"

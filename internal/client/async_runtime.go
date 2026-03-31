@@ -84,8 +84,15 @@ func (c *Client) resetRuntimeBindings(resetSession bool) {
 	c.bumpStreamSetVersion()
 
 	c.dnsResponses = fragmentStore.New[dnsFragmentKey](c.cfg.DNSResponseFragmentStoreCap)
+
 	if c.localDNSCache != nil {
 		c.localDNSCache.ClearPending()
+	}
+
+	if c.socksRateLimit == nil {
+		c.socksRateLimit = newSocksRateLimiter()
+	} else {
+		c.socksRateLimit.Reset()
 	}
 
 	c.closeResolverConnPools()

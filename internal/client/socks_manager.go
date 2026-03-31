@@ -172,6 +172,11 @@ func (c *Client) handleSOCKS5Request(ctx context.Context, conn net.Conn) {
 			_ = conn.Close()
 			return
 		}
+
+		if c.socksRateLimit != nil {
+			c.socksRateLimit.RecordSuccess(extractIP(conn))
+		}
+
 		_, _ = conn.Write([]byte{SOCKS5_USER_AUTH_VERSION, SOCKS5_USER_AUTH_SUCCESS})
 	}
 
@@ -279,6 +284,9 @@ func (c *Client) handleSOCKS4Request(ctx context.Context, conn net.Conn) {
 		_ = c.sendSocks4Reply(conn, false)
 		_ = conn.Close()
 		return
+	}
+	if c.cfg.SOCKS5Auth && c.socksRateLimit != nil {
+		c.socksRateLimit.RecordSuccess(extractIP(conn))
 	}
 
 	atyp := byte(SOCKS5_ATYP_IPV4)

@@ -51,17 +51,33 @@ func TestResetRuntimeBindings(t *testing.T) {
 	c.last_stream_id = 10
 	c.sessionID = 1
 	c.sessionReady = true
+	c.socksRateLimit.RecordFailure("10.0.0.1")
+	oldLimiter := c.socksRateLimit
 
 	c.resetRuntimeBindings(true)
 
 	if c.last_stream_id != 0 {
 		t.Errorf("expected last_stream_id 0, got %d", c.last_stream_id)
 	}
+
 	if c.sessionID != 0 {
 		t.Errorf("expected sessionID 0, got %d", c.sessionID)
 	}
+
 	if c.sessionReady {
 		t.Error("expected sessionReady false")
+	}
+
+	if c.socksRateLimit == nil {
+		t.Fatal("expected socksRateLimit to be reinitialized")
+	}
+
+	if c.socksRateLimit != oldLimiter {
+		t.Fatal("expected socksRateLimit instance to be reset in place")
+	}
+
+	if c.socksRateLimit.IsBlocked("10.0.0.1") {
+		t.Fatal("expected reset to clear prior SOCKS rate-limit state")
 	}
 }
 

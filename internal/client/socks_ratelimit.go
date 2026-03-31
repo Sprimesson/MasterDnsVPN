@@ -167,6 +167,30 @@ func (r *socksRateLimiter) RecordFailure(ip string) bool {
 	return false
 }
 
+// RecordSuccess clears accumulated failure/banning state for the given IP after
+// a successful authentication.
+func (r *socksRateLimiter) RecordSuccess(ip string) {
+	if ip == "" || isLoopbackIP(ip) {
+		return
+	}
+
+	r.mu.Lock()
+	delete(r.records, ip)
+	r.mu.Unlock()
+}
+
+// Reset clears all accumulated SOCKS auth rate-limit state in place.
+func (r *socksRateLimiter) Reset() {
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	r.records = make(map[string]*socksAuthFailureRecord)
+	r.lastPurge = time.Now()
+	r.mu.Unlock()
+}
+
 // purgeLocked removes expired records to prevent unbounded memory growth.
 // Must be called with r.mu held.
 func (r *socksRateLimiter) purgeLocked(now time.Time) {

@@ -81,6 +81,24 @@ func TestSocksRateLimiterLoopbackNeverBanned(t *testing.T) {
 	}
 }
 
+func TestSocksRateLimiterSuccessClearsState(t *testing.T) {
+	rl := newSocksRateLimiter()
+	ip := "10.0.0.99"
+
+	for i := 0; i < socksRateLimitMaxFailures-1; i++ {
+		rl.RecordFailure(ip)
+	}
+
+	rl.RecordSuccess(ip)
+
+	if rl.IsBlocked(ip) {
+		t.Fatal("success should clear any pending block state")
+	}
+	if rl.RecordFailure(ip) {
+		t.Fatal("success should clear accumulated failures")
+	}
+}
+
 func TestSocksRateLimiterBanDecayResetsEscalation(t *testing.T) {
 	rl := newSocksRateLimiter()
 	ip := "10.0.0.50"

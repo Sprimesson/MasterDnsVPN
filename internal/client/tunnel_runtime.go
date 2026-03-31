@@ -24,16 +24,16 @@ const (
 	// RuntimeUDPReadBufferSize defines the maximum size of the UDP read buffer.
 	RuntimeUDPReadBufferSize = 65535
 
-	// pooledConnMaxAge is the maximum age a pooled UDP connection can have
-	// before it is discarded and re-dialed. Stale connections can have their
+	// pooledConnMaxAge is the maximum time a UDP connection can remain idle in
+	// the resolver pool before it is discarded and re-dialed. Stale connections can have their
 	// NAT mappings expired, causing silent packet loss (writes succeed but
 	// responses route to a dead port).
 	pooledConnMaxAge = 90 * time.Second
 )
 
 type pooledUDPConn struct {
-	conn      *net.UDPConn
-	createdAt time.Time
+	conn     *net.UDPConn
+	pooledAt time.Time
 }
 
 // exchangeUDPQueryWithConn sends one UDP packet through the provided connection
@@ -108,7 +108,7 @@ func (c *Client) getUDPConn(resolverLabel string) (*net.UDPConn, error) {
 	for {
 		select {
 		case pc := <-pool:
-			if now.Sub(pc.createdAt) > pooledConnMaxAge {
+			if now.Sub(pc.pooledAt) > pooledConnMaxAge {
 				_ = pc.conn.Close()
 				continue // discard stale, try next
 			}
@@ -136,7 +136,7 @@ func (c *Client) putUDPConn(resolverLabel string, conn *net.UDPConn) {
 	}
 
 	select {
-	case pool <- pooledUDPConn{conn: conn, createdAt: time.Now()}:
+	case pool <- pooledUDPConn{conn: conn, pooledAt: time.Now()}:
 	default:
 		_ = conn.Close()
 	}

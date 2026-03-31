@@ -98,7 +98,14 @@ func (l *TCPListener) Start(ctx context.Context, ip string, port int) error {
 	}
 
 	if l.client != nil && l.client.log != nil {
-		if hint := netutil.FormatListenHint(ip, port); hint != "" {
+		actualPort := port
+		if len(listeners) > 0 {
+			if localAddr, ok := listeners[0].Addr().(*net.TCPAddr); ok && localAddr != nil && localAddr.Port > 0 {
+				actualPort = localAddr.Port
+			}
+		}
+
+		if hint := netutil.FormatListenHint(ip, actualPort); hint != "" {
 			l.client.log.Infof("🌐 <green>%s Proxy %s</green>", l.protocolType, hint)
 		}
 	}

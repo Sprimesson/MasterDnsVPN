@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+cd "$(dirname "$0")"
+source ./ver
+rm ./client.exe
+rm ./client-darwin
+
+echo "Building client (Win+Mac)..."
+(GOOS=windows GOARCH=amd64 go build ./cmd/client) || exit 1
+(GOOS=darwin GOARCH=amd64 go build -o client-darwin ./cmd/client) || exit 1
+
+echo Copying client and config...
+cp ./client_config.toml $DEST_DIR/client_config.toml || exit 1
+cp ./client.exe $DEST_DIR/MasterDnsVPN_Client_Win64_$DEPLOY_VER.exe || exit 1
+cp ./client-darwin $DEST_DIR/MasterDnsVPN_Client_Darwin_$DEPLOY_VER || exit 1

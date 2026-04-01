@@ -285,6 +285,10 @@ dispatchLoop:
 		if VpnProto.IsPackableControlPacket(item.PacketType, len(item.Payload)) && maxBlocks > 1 {
 			payload := make([]byte, 0, maxBlocks*VpnProto.PackedControlBlockSize)
 			payload = VpnProto.AppendPackedControlBlock(payload, item.PacketType, selectedStreamID, item.SequenceNum, item.FragmentID, item.TotalFragments)
+			if c.log != nil && c.extLogDispatch {
+				c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
+					c.sessionID, selectedStreamID, item.PacketType, item.SequenceNum, item.FragmentID, item.TotalFragments)
+			}
 			blocks := 1
 
 			if selected != nil {
@@ -299,6 +303,10 @@ dispatchLoop:
 					}
 					selected.NoteTXPacketDequeued(popped)
 					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, selected.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					if c.log != nil && c.extLogDispatch {
+						c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
+							c.sessionID, selected.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					}
 					blocks++
 					selected.ReleaseTXPacket(popped)
 				}
@@ -313,6 +321,10 @@ dispatchLoop:
 						break
 					}
 					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					if c.log != nil && c.extLogDispatch {
+						c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
+							c.sessionID, popped.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					}
 					blocks++
 				}
 			}
@@ -337,6 +349,10 @@ dispatchLoop:
 								break
 							}
 							payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+							if c.log != nil && c.extLogDispatch {
+								c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
+									c.sessionID, popped.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+							}
 							blocks++
 						}
 						continue
@@ -357,6 +373,10 @@ dispatchLoop:
 						}
 						otherStream.NoteTXPacketDequeued(popped)
 						payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, uint16(otherID), popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+						if c.log != nil && c.extLogDispatch {
+							c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
+								c.sessionID, uint16(otherID), popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+						}
 						blocks++
 						otherStream.ReleaseTXPacket(popped)
 					}
@@ -378,6 +398,12 @@ dispatchLoop:
 		} else {
 			finalPacketType = item.PacketType
 			finalPayload = item.Payload
+		}
+
+		if c.extLogDispatch && !wasPacked && c.log != nil {
+			c.log.Debugf("📤-dispatch | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
+				c.sessionID, selectedStreamID, item.PacketType, item.SequenceNum, item.FragmentID, item.TotalFragments,
+				len(item.Payload), item.Payload)
 		}
 
 		c.pingManager.NotifyPacket(finalPacketType, false)

@@ -284,10 +284,19 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, re
 	sessionID := record.ID
 
 	if pkt, ok := s.dequeueSessionResponse(sessionID, now); ok {
+		if s.extLogDispatch {
+			s.log.Debugf("Dequed outgoung packet of type %d", int(pkt.PacketType))
+		}
+
 		return s.buildSessionVPNResponse(questionPacket, requestName, record, *pkt)
 	}
 
 	payload := s.nextPongPayload()
+
+	if s.extLogDispatch {
+		s.log.Debugf("Send outgoung PONG")
+	}
+
 	return s.buildSessionVPNResponse(questionPacket, requestName, record, VpnProto.Packet{
 		PacketType: Enums.PACKET_PONG,
 		Payload:    payload[:],

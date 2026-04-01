@@ -19,6 +19,10 @@ import (
 )
 
 func (s *Server) handlePacket(packet []byte) []byte {
+	if s.log != nil && s.extLogDns {
+		s.log.Debugf("--------- DNS in ---------")
+	}
+
 	parsed, err := DnsParser.ParseDNSRequestLite(packet)
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrNotDNSRequest) || errors.Is(err, DnsParser.ErrPacketTooShort) {
@@ -48,6 +52,10 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 	vpnPacket, err := VpnProto.ParseInflatedFromLabels(decision.Labels, s.codec)
 	if err != nil {
 		return s.buildNoDataResponseLiteLogged(packet, parsed, "vpn-proto-parse-failed")
+	}
+
+	if s.extLogDispatch {
+		s.log.Debugf("Dispatch incoming packet of type %d", int(vpnPacket.PacketType))
 	}
 
 	if vpnPacket.PacketType == Enums.PACKET_SESSION_CLOSE {

@@ -659,6 +659,10 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	// 2. Notify activity monitor (PingManager)
 	c.NotifyPacket(vpnPacket.PacketType, true)
 
+	if c.IsExtLogDispatch() {
+		c.Log().Debugf("Dispatch incoming packet of type %d", int(vpnPacket.PacketType))
+	}
+
 	// 3. Queue deterministic non-data ACKs before any handler logic runs.
 	if handled := c.preprocessInboundPacket(vpnPacket); handled {
 		return

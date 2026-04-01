@@ -25,6 +25,7 @@ type Logger struct {
 	color          bool
 	appNameText    string
 	appNameColored string
+	noTime         bool
 }
 
 const (
@@ -94,6 +95,13 @@ func NewWithFile(name, rawLevel, filePath string) *Logger {
 		color:          shouldUseColor(),
 		appNameText:    appName,
 		appNameColored: "\x1b[36m" + appName + "\x1b[0m",
+		noTime:         false,
+	}
+}
+
+func (l *Logger) DisableTime() {
+	if l != nil {
+		l.noTime = true
 	}
 }
 
@@ -128,10 +136,13 @@ func (l *Logger) logf(level int, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	ts := time.Now().Format("2006/01/02 15:04:05")
+	var tsPrefix string
+	if !l.noTime {
+		tsPrefix = time.Now().Format("2006/01/02 15:04:05") + " "
+	}
 
 	if l.fileWriter != nil {
-		fileLine := ts + " " + plainLevelTexts[level] + " " + plainMsg + "\n"
+		fileLine := tsPrefix + plainLevelTexts[level] + " " + plainMsg + "\n"
 		if _, err := io.WriteString(l.fileWriter, fileLine); err != nil {
 			_ = l.fileWriter.Close()
 			l.fileWriter = nil
@@ -153,7 +164,7 @@ func (l *Logger) logf(level int, format string, args ...any) {
 			levelText = coloredLevelTexts[level]
 		}
 
-		consoleLine := ts + " " + appName + " " + levelText + " " + finalMsg + "\n"
+		consoleLine := tsPrefix + appName + " " + levelText + " " + finalMsg + "\n"
 		_, _ = io.WriteString(l.consoleWriter, consoleLine)
 	}
 }

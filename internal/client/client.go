@@ -139,7 +139,10 @@ type Client struct {
 	localDNSCacheFlushOnce sync.Once
 
 	// SOCKS5 brute-force rate limiter
-	socksRateLimit *socksRateLimiter
+	socksRateLimit  *socksRateLimiter
+	maxActiveStream uint16
+	extLogDispatch  bool
+	extLogSocks     bool
 }
 
 // clientStreamTXPacket represents a queued packet pending transmission or retransmission.
@@ -278,6 +281,9 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		orphanQueue:            mlq.New[VpnProto.Packet](cfg.OrphanQueueInitialCapacity),
 		sessionResetSignal:     make(chan struct{}, 1),
 		socksRateLimit:         newSocksRateLimiter(),
+		maxActiveStream:        64,
+		extLogDispatch:         false,
+		extLogSocks:            false,
 	}
 
 	if c.streamResolverFailoverResendThreshold < 1 {
@@ -519,4 +525,8 @@ func (c *Client) HandleErrorDrop(packet VpnProto.Packet) error {
 
 func (c *Client) HandleMTUResponse(packet VpnProto.Packet) error {
 	return nil
+}
+
+func (c *Client) IsExtLogDispatch() bool {
+	return c.extLogDispatch
 }

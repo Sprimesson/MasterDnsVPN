@@ -21,6 +21,9 @@ func buildTunnelTXTQuestion(domain string, encoded string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	//fmt.Println("-------- DNS ", name, " --------")
+
 	return DnsParser.BuildTXTQuestionPacket(name, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
 }
 

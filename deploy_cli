@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+cd "$(dirname "$0")"
+
+killall MasterDnsVPN_Client_Linux_Spr11 -9
+
+./deploy_cli_linux || exit 1
+
+source ./ver
+
+echo Running linux cli...
+(cd $DEST_DIR && ./MasterDnsVPN_Client_Linux_$DEPLOY_VER)

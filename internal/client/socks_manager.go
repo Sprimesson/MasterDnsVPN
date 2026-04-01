@@ -690,6 +690,10 @@ func (c *Client) HandleSocksConnected(packet VpnProto.Packet) error {
 		return nil
 	}
 
+	if c.log != nil && c.extLogSocks {
+		c.log.Debugf("Remote connection established for socks stream %d", int(packet.StreamID))
+	}
+
 	s.socksResultMu.Lock()
 	switch s.StatusValue() {
 	case streamStatusActive:
@@ -741,6 +745,10 @@ func (c *Client) HandleSocksFailure(packet VpnProto.Packet) error {
 	case streamStatusSocksFailed, streamStatusDraining, streamStatusClosing, streamStatusTimeWait, streamStatusClosed:
 		s.socksResultMu.Unlock()
 		return nil
+	}
+
+	if c.log != nil && c.extLogSocks {
+		c.log.Debugf("Remote connection FAILED for socks stream %d", int(packet.StreamID))
 	}
 
 	if ok && s.StatusValue() == streamStatusCancelled {

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+SERVER_NAME=sewr3
+SERVICE_NAME=masterdnsvpn2
+SERVICE_DIR=/opt/masterdnsvpn2
+SERVICE_BIN=mdvserver2
+
+DEPLOY_VER=Spr21
+DEST_DIR=/mnt/c/Projects/denerastin/spr2x/MasterDnsVPN_Client

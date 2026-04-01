@@ -42,6 +42,10 @@ func handlePackedControlBlocks(c ClientContext, packet VpnProto.Packet, addr *ne
 			TotalFragments:  totalFrag,
 		}
 
+		if c.IsExtLogDispatch() {
+			c.Log().Debugf("Dispatch inner incoming packet %d of type %d", i, int(innerPacket.PacketType))
+		}
+
 		if c.PreprocessInboundPacket(innerPacket) {
 			continue
 		}

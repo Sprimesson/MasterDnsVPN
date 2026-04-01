@@ -84,6 +84,8 @@ type Server struct {
 	lastDeferredDropLogUnix  atomic.Int64
 	pongNonce                atomic.Uint32
 	invalidDropMode          atomic.Uint32
+	extLogDns                bool
+	extLogDispatch           bool
 }
 
 type request struct {
@@ -171,6 +173,8 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 				return make([]byte, cfg.MaxPacketSize)
 			},
 		},
+		extLogDns:      false,
+		extLogDispatch: false,
 	}
 }
 

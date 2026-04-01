@@ -19,9 +19,7 @@ const (
 // Lower numbers mean higher priority.
 func DefaultPacketPriority(packetType uint8) int {
 	switch packetType {
-	case PACKET_STREAM_DATA_ACK,
-		PACKET_STREAM_DATA_NACK,
-		PACKET_STREAM_SYN,
+	case PACKET_STREAM_SYN,
 		PACKET_STREAM_SYN_ACK,
 		PACKET_STREAM_CONNECTED,
 		PACKET_STREAM_CONNECTED_ACK,
@@ -65,7 +63,9 @@ func DefaultPacketPriority(packetType uint8) int {
 		PACKET_DNS_QUERY_REQ:
 		return PacketPriorityRetry
 
-	case PACKET_STREAM_DATA:
+	case PACKET_STREAM_DATA_ACK,
+		PACKET_STREAM_DATA_NACK,
+		PACKET_STREAM_DATA:
 		return PacketPriorityNormal
 
 	case PACKET_STREAM_CLOSE_WRITE,

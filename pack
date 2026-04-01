@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+cd "$(dirname "$0")"
+./deploy_cli_linux || exit 1
+./deploy_cli_winmac || exit 1
+
+source ./ver
+
+cd $DEST_DIR
+
+zip -r MasterDnsVPN_Client_Linux_$DEPLOY_VER MasterDnsVPN_Client_Linux_$DEPLOY_VER client_resolvers.txt client_config.toml || exit 1
+zip -r MasterDnsVPN_Client_Win64_$DEPLOY_VER MasterDnsVPN_Client_Win64_$DEPLOY_VER.exe client_resolvers.txt client_config.toml || exit 1
+zip -r MasterDnsVPN_Client_Darwin_$DEPLOY_VER MasterDnsVPN_Client_Darwin_$DEPLOY_VER client_resolvers.txt client_config.toml || exit 1
+
+echo Success

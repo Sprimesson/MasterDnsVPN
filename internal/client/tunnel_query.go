@@ -29,6 +29,9 @@ func prepareTunnelDomain(domain string) (preparedTunnelDomain, error) {
 	if err != nil {
 		return preparedTunnelDomain{}, err
 	}
+
+	// fmt.Println("-------- DNS ", name, " --------")
+
 	return preparedTunnelDomain{normalized: normalized, qname: qname}, nil
 }
 

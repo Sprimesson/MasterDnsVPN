@@ -23,3 +23,8 @@ logs/
 build/
 .gocache
 .bench/
+/client
+/client-darwin
+/server
+/mdvserver*
+client_config_sample.toml

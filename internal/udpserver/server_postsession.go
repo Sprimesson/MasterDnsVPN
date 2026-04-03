@@ -27,13 +27,6 @@ const (
 )
 
 func (s *Server) handlePostSessionPacket(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
-	/*if s.log != nil && s.extLogDispatch {		s.log.Debugf(
-			"📦 handlePostSessionPacket | Session: %d | PacketType: %d | StreamID: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
-			vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID,
-			vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments,
-			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
-	}*/
 	if s.rejectProtocolMismatchedSyn(vpnPacket.PacketType) {
 		return false
 	}
@@ -52,6 +45,14 @@ func (s *Server) handlePostSessionPacket(vpnPacket VpnProto.Packet, sessionRecor
 }
 
 func (s *Server) dispatchPostSessionPacket(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
+	if s.log != nil && s.extLogDispatch {
+		s.log.Debugf(
+			">>  %d (%d/%d) | %d/%d/%d | (%d) %x",
+			vpnPacket.PacketType, vpnPacket.SessionID, vpnPacket.StreamID,
+			vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments,
+			len(vpnPacket.Payload), vpnPacket.Payload)
+	}
+
 	switch vpnPacket.PacketType {
 	case Enums.PACKET_PING:
 		return true
@@ -273,11 +274,10 @@ func (s *Server) preprocessInboundPacket(vpnPacket VpnProto.Packet) bool {
 func (s *Server) handlePackedControlBlocksRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
 	if s.log != nil && s.extLogDispatch {
 		s.log.Debugf(
-			"🗂️ handlePackedControlBlocksRequest | Session: %d | PacketType: %d | StreamID: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
-			vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID,
+			">>  %d (%d/%d) | %d/%d/%d | (%d) %x",
+			vpnPacket.PacketType, vpnPacket.SessionID, vpnPacket.StreamID,
 			vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments,
-			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+			len(vpnPacket.Payload), vpnPacket.Payload)
 	}
 	if sessionRecord == nil || len(vpnPacket.Payload) < VpnProto.PackedControlBlockSize {
 		return false
@@ -305,10 +305,6 @@ func (s *Server) handlePackedControlBlocksRequest(vpnPacket VpnProto.Packet, ses
 			HasSequenceNum: true,
 			FragmentID:     fragmentID,
 			TotalFragments: totalFragments,
-		}
-
-		if s.extLogDispatch {
-			s.log.Debugf("Dispatch inner packet of type %d", int(block.PacketType))
 		}
 
 		if s.preprocessInboundPacket(block) {
@@ -520,12 +516,12 @@ func (s *Server) dispatchDeferredSessionPacketTracked(vpnPacket VpnProto.Packet,
 
 func (s *Server) handleDNSQueryRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🌐 handleDNSQueryRequest | Session: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
 			vpnPacket.SessionID, vpnPacket.SequenceNum,
 			vpnPacket.FragmentID, vpnPacket.TotalFragments,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 	if sessionRecord == nil {
 		return false
@@ -722,12 +718,12 @@ func (s *Server) tryHandleImmediateRejectedSOCKS5Syn(vpnPacket VpnProto.Packet) 
 
 func (s *Server) handleStreamSynRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🔗 handleStreamSynRequest | Session: %d | StreamID: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			vpnPacket.FragmentID, vpnPacket.TotalFragments,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 || sessionRecord == nil {
 		return false
@@ -776,12 +772,12 @@ func (s *Server) rejectProtocolMismatchedSyn(packetType uint8) bool {
 
 func (s *Server) handleSOCKS5SynRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🧦 handleSOCKS5SynRequest | %d / %d | %d//%d/%d | <%d> %x",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			vpnPacket.FragmentID, vpnPacket.TotalFragments,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 || sessionRecord == nil {
 		return false
@@ -828,12 +824,12 @@ func (s *Server) handleStreamDataRequest(vpnPacket VpnProto.Packet) bool {
 	}
 
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"📨 handleStreamDataRequest | Session: %d | StreamID: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			vpnPacket.FragmentID, vpnPacket.TotalFragments,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 
 	stream, exists := record.getStream(vpnPacket.StreamID)
@@ -872,11 +868,11 @@ func (s *Server) handleStreamDataNackRequest(vpnPacket VpnProto.Packet) bool {
 
 func (s *Server) handleStreamCloseReadRequest(vpnPacket VpnProto.Packet) bool {
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🏁 handleStreamCloseReadRequest | Session: %d | StreamID: %d | Seq: %d | Payload(%d): %x",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 {
@@ -920,11 +916,11 @@ func (s *Server) handleStreamCloseWriteRequest(vpnPacket VpnProto.Packet) bool {
 
 func (s *Server) handleStreamRSTRequest(vpnPacket VpnProto.Packet) bool {
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🔴 handleStreamRSTRequest | Session: %d | StreamID: %d | Seq: %d | Payload(%d): %x",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			len(vpnPacket.Payload), vpnPacket.Payload,
-		)
+		)*/
 	}
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 {
 		return false

@@ -2421,6 +2421,13 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 	}
 }
 
+func Btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------
 // Final Close Path
 // ---------------------------------------------------------------------
@@ -2483,7 +2490,7 @@ func (a *ARQ) finalizeClose(reason string) {
 	a.mu.Unlock()
 
 	a.logger.Debugf(
-		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | PendingInbound: %d | RxQueue: %d/%d | RcvNxt: %d | LocalWrite: pending=%t closed=%t broken=%t | CloseRead: %t/%t/%t | CloseWrite: %t/%t/%t | WaitingAck: %t/%s | Deferred: %t/%s | RST: %t/%t/%t",
+		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | PendingInbound: %d | RxQueue: %d/%d | RcvNxt: %d | LocalWrite pending/closed/broken=%d%d%d | CloseRead: %d%d%d | CloseWrite: %d%d%d | WaitingAck: %d/%s | Deferred: %d/%s | RST: %d%d%d",
 		a.sessionID,
 		a.streamID,
 		reason,
@@ -2494,22 +2501,22 @@ func (a *ARQ) finalizeClose(reason string) {
 		rxQueueLen,
 		rxQueueCap,
 		rcvNxt,
-		localWritePending,
-		localWriteClosed,
-		localWriterBroken,
-		closeReadSent,
-		closeReadReceived,
-		closeReadAcked,
-		closeWriteSent,
-		closeWriteReceived,
-		closeWriteAcked,
-		waitingAck,
+		Btoi(localWritePending),
+		Btoi(localWriteClosed),
+		Btoi(localWriterBroken),
+		Btoi(closeReadSent),
+		Btoi(closeReadReceived),
+		Btoi(closeReadAcked),
+		Btoi(closeWriteSent),
+		Btoi(closeWriteReceived),
+		Btoi(closeWriteAcked),
+		Btoi(waitingAck),
 		Enums.PacketTypeName(waitingAckFor),
-		deferredClose,
+		Btoi(deferredClose),
 		Enums.PacketTypeName(deferredPacket),
-		rstSent,
-		rstReceived,
-		rstAcked,
+		Btoi(rstSent),
+		Btoi(rstReceived),
+		Btoi(rstAcked),
 	)
 
 	if owner, ok := a.enqueuer.(terminalOwner); ok {

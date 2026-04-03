@@ -245,11 +245,11 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 		return
 	}
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf(
+		/*s.log.Debugf(
 			"🧦 processDeferredSOCKS5Syn | %d / %d | %d//%d/%d",
 			vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum,
 			vpnPacket.FragmentID, vpnPacket.TotalFragments,
-		)
+		)*/
 	}
 
 	record, ok := s.sessions.Get(vpnPacket.SessionID)
@@ -272,10 +272,6 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 		totalFragments,
 		now,
 	)
-
-	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf("Ra %d %d", Btoi(completed), Btoi(ready))
-	}
 
 	if completed || !ready {
 		return
@@ -323,16 +319,8 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 	prevPort := stream.TargetPort
 	stream.mu.RUnlock()
 
-	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf("Rb")
-	}
-
 	if prevConnected {
 		if prevHost == target.Host && prevPort == target.Port {
-			if s.log != nil && s.extLogDispatch {
-				s.log.Debugf("Rc")
-			}
-
 			if s.log != nil {
 				s.log.Debugf("🧦 <green>SOCKS5_SYN Fast-Ack (Existing), Session: <cyan>%d</cyan> | Stream: <cyan>%d</cyan></green>", vpnPacket.SessionID, vpnPacket.StreamID)
 			}
@@ -350,10 +338,6 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 			)
 			s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 			return
-		}
-
-		if s.log != nil && s.extLogDispatch {
-			s.log.Debugf("Rd")
 		}
 
 		stream.ARQ.SendControlPacketWithTTL(
@@ -375,7 +359,7 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 		return
 	}
 	if s.log != nil && s.extLogDispatch {
-		s.log.Debugf("Re %s %d", target.Host, int(target.Port))
+		s.log.Debugf("🐉 Dial %s %d", target.Host, int(target.Port))
 	}
 
 	attemptTimeout := s.deferredConnectAttemptTimeout()
@@ -394,9 +378,6 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 
 		if !s.shouldExecuteDeferredPacket(vpnPacket) {
 			return
-		}
-		if s.log != nil && s.extLogDispatch {
-			s.log.Debugf("Rf %s %d: %d", target.Host, int(target.Port), err.Error())
 		}
 
 		packetType := s.mapSOCKSConnectError(err)

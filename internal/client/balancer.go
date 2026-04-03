@@ -412,10 +412,11 @@ func normalizeRequiredCount(validCount, requiredCount, defaultIfInvalid int) int
 }
 
 func (b *Balancer) selectRoundRobin(snap *balancerSnapshot, count int) []Connection {
-	start := int(b.rrCounter.Add(uint64(count)) - uint64(count))
+	n := len(snap.valid)
+	start := roundRobinStartIndex(b.rrCounter.Add(uint64(count))-uint64(count), n)
 	selected := make([]Connection, count)
 	for i := 0; i < count; i++ {
-		conn, ok := derefConnection(snap.connections, snap.valid[(start+i)%len(snap.valid)])
+		conn, ok := derefConnection(snap.connections, snap.valid[(start+i)%n])
 		if ok {
 			selected[i] = conn
 		}
@@ -583,7 +584,7 @@ func (b *Balancer) roundRobinBestConnection(snap *balancerSnapshot) (Connection,
 	if snap == nil || len(snap.valid) == 0 {
 		return Connection{}, false
 	}
-	pos := int(b.rrCounter.Add(1)-1) % len(snap.valid)
+	pos := roundRobinStartIndex(b.rrCounter.Add(1)-1, len(snap.valid))
 	return derefConnection(snap.connections, snap.valid[pos])
 }
 
@@ -610,12 +611,19 @@ func (b *Balancer) rotatedValidIndices(snap *balancerSnapshot, step int) []int {
 		step = 1
 	}
 
-	start := int(b.rrCounter.Add(uint64(step)) - uint64(step))
+	start := roundRobinStartIndex(b.rrCounter.Add(uint64(step))-uint64(step), len(snap.valid))
 	ordered := make([]int, len(snap.valid))
 	for i := range snap.valid {
 		ordered[i] = snap.valid[(start+i)%len(snap.valid)]
 	}
 	return ordered
+}
+
+func roundRobinStartIndex(counter uint64, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return int(counter % uint64(n))
 }
 
 func (b *Balancer) hasLossSignal(snap *balancerSnapshot) bool {

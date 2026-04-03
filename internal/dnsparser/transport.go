@@ -23,74 +23,47 @@ import (
 )
 
 var (
-	ErrTXTAnswerMissing   = errors.New("dns txt answer missing")
-	ErrTXTAnswerMalformed = errors.New("dns txt answer malformed")
-	ErrTXTAnswerTooLarge  = errors.New("dns txt answer too large")
+	ErrAnswerMissing   = errors.New("dns answer missing")
+	ErrAnswerMalformed = errors.New("dns answer malformed")
+	ErrAnswerTooLarge  = errors.New("dns answer too large")
 )
 
 const (
-	maxDNSNameLen       = 253
-	maxDNSLabelLen      = 63
-	maxTXTAnswerPayload = 255
-	maxTXTEncodedChunk  = 191
+	maxDNSNameLen        = 253
+	maxDNSLabelLen       = 63
+	maxTXTAnswerPayload  = 255
+	maxTXTEncodedChunk   = 191
+	maxAAAASinglePayload = 7
 )
 
-func BuildTXTQuestionPacket(name string, qType uint16, ednsUDPSize uint16) ([]byte, error) {
-	qname, err := encodeDNSNameStrict(name)
+func PrepareTunnelDomainQname(domain string) (string, []byte, error) {
+	normalizedDomain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	if normalizedDomain == "" {
+		return "", nil, ErrInvalidName
+	}
+
+	domainQname, err := encodeDNSNameStrict(normalizedDomain)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-
-	requestID := nextDNSRequestID()
-
-	arCount := uint16(0)
-	optLen := 0
-	if ednsUDPSize > 0 {
-		arCount = 1
-		optLen = 11
-	}
-
-	packet := make([]byte, dnsHeaderSize+len(qname)+4+optLen)
-	binary.BigEndian.PutUint16(packet[0:2], requestID)
-	binary.BigEndian.PutUint16(packet[2:4], 0x0100)
-	binary.BigEndian.PutUint16(packet[4:6], 1)
-	binary.BigEndian.PutUint16(packet[10:12], arCount)
-
-	offset := dnsHeaderSize
-	offset += copy(packet[offset:], qname)
-	binary.BigEndian.PutUint16(packet[offset:offset+2], qType)
-	binary.BigEndian.PutUint16(packet[offset+2:offset+4], Enums.DNSQ_CLASS_IN)
-	offset += 4
-
-	if ednsUDPSize > 0 {
-		packet[offset] = 0x00
-		offset++
-		binary.BigEndian.PutUint16(packet[offset:offset+2], Enums.DNS_RECORD_TYPE_OPT)
-		offset += 2
-		binary.BigEndian.PutUint16(packet[offset:offset+2], ednsUDPSize)
-		offset += 2
-		offset += 4
-		binary.BigEndian.PutUint16(packet[offset:offset+2], 0)
-	}
-
-	return packet, nil
+	return normalizedDomain, domainQname, nil
 }
 
-func BuildTunnelTXTQuestionPacket(domain string, encodedFrame []byte, qType uint16, ednsUDPSize uint16) ([]byte, error) {
+func BuildTunnelQuestionPacket(domain string, encodedFrame []byte, qType uint16, ednsUDPSize uint16) ([]byte, error) {
 	normalizedDomain, domainQname, err := PrepareTunnelDomainQname(domain)
 	if err != nil {
 		return nil, err
 	}
 
-	return BuildTunnelTXTQuestionPacketPrepared(normalizedDomain, domainQname, encodedFrame, qType, ednsUDPSize)
+	return BuildTunnelQuestionPacketPrepared(normalizedDomain, domainQname, encodedFrame, qType, ednsUDPSize)
 }
 
-func BuildTunnelTXTQuestionPacketPrepared(normalizedDomain string, domainQname []byte, encodedFrame []byte, qType uint16, ednsUDPSize uint16) ([]byte, error) {
+func BuildTunnelQuestionPacketPrepared(normalizedDomain string, domainQname []byte, encodedFrame []byte, qType uint16, ednsUDPSize uint16) ([]byte, error) {
 	if normalizedDomain == "" || len(domainQname) == 0 {
 		return nil, ErrInvalidName
 	}
 	if len(encodedFrame) == 0 {
-		return buildTXTQuestionPacketPrepared(domainQname, qType, ednsUDPSize), nil
+		return buildQuestionPacketPrepared(domainQname, qType, ednsUDPSize), nil
 	}
 	if encodedQNameLen(len(encodedFrame), len(normalizedDomain)) > maxDNSNameLen {
 		return nil, ErrInvalidName
@@ -141,20 +114,7 @@ func BuildTunnelTXTQuestionPacketPrepared(normalizedDomain string, domainQname [
 	return packet, nil
 }
 
-func PrepareTunnelDomainQname(domain string) (string, []byte, error) {
-	normalizedDomain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
-	if normalizedDomain == "" {
-		return "", nil, ErrInvalidName
-	}
-
-	domainQname, err := encodeDNSNameStrict(normalizedDomain)
-	if err != nil {
-		return "", nil, err
-	}
-	return normalizedDomain, domainQname, nil
-}
-
-func buildTXTQuestionPacketPrepared(qname []byte, qType uint16, ednsUDPSize uint16) []byte {
+func buildQuestionPacketPrepared(qname []byte, qType uint16, ednsUDPSize uint16) []byte {
 	requestID := nextDNSRequestID()
 
 	arCount := uint16(0)
@@ -190,9 +150,13 @@ func buildTXTQuestionPacketPrepared(qname []byte, qType uint16, ednsUDPSize uint
 	return packet
 }
 
-func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayloads [][]byte) ([]byte, error) {
+//===================================================================================================================
+// Responses
+//===================================================================================================================
+
+func BuildResponsePacket(qType uint16, questionPacket []byte, answerName string, answerPayloads [][]byte) ([]byte, error) {
 	if len(answerPayloads) == 1 {
-		return buildSingleTXTResponsePacket(questionPacket, answerName, answerPayloads[0])
+		return buildSingleResponsePacket(qType, questionPacket, answerName, answerPayloads[0])
 	}
 
 	if len(questionPacket) < dnsHeaderSize {
@@ -237,7 +201,7 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 		} else {
 			offset += copy(response[offset:], nameBytes)
 		}
-		binary.BigEndian.PutUint16(response[offset:offset+2], Enums.DNS_RECORD_TYPE_TXT)
+		binary.BigEndian.PutUint16(response[offset:offset+2], qType)
 		binary.BigEndian.PutUint16(response[offset+2:offset+4], Enums.DNSQ_CLASS_IN)
 		binary.BigEndian.PutUint32(response[offset+4:offset+8], 0)
 		binary.BigEndian.PutUint16(response[offset+8:offset+10], uint16(len(payload)))
@@ -269,23 +233,49 @@ func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet Vpn
 		return nil, err
 	}
 
-	maxChunk := maxTXTAnswerPayload
-	if baseEncode {
-		maxChunk = maxTXTEncodedChunk
-	}
-	if len(rawFrame) <= maxChunk {
-		return buildSingleTXTResponsePacket(questionPacket, answerName, buildTXTAnswerChunk(rawFrame, baseEncode))
+	if len(questionPacket) < dnsHeaderSize {
+		return nil, ErrPacketTooShort
 	}
 
-	answerPayloads, err := buildTXTAnswerChunks(rawFrame, baseEncode)
+	header := parseHeader(questionPacket)
+	questionBytes, qCount, _ := extractQuestionSection(questionPacket, header)
+	questions, _, err := parseQuestions(questionBytes, 0, int(qCount))
+
 	if err != nil {
+		println(err.Error())
 		return nil, err
 	}
 
-	return BuildTXTResponsePacket(questionPacket, answerName, answerPayloads)
+	origQType := questions[0].Type
+
+	if origQType == Enums.DNS_RECORD_TYPE_TXT {
+		maxChunk := maxTXTAnswerPayload
+		if baseEncode {
+			maxChunk = maxTXTEncodedChunk
+		}
+		if len(rawFrame) <= maxChunk {
+			return buildSingleResponsePacket(origQType, questionPacket, answerName, buildTXTAnswerChunk(rawFrame, baseEncode))
+		}
+
+		answerPayloads, err := buildTXTAnswerChunks(rawFrame, baseEncode)
+		if err != nil {
+			return nil, err
+		}
+
+		return BuildResponsePacket(origQType, questionPacket, answerName, answerPayloads)
+	} else if origQType == Enums.DNS_RECORD_TYPE_AAAA {
+		answerPayloads, err := BuildAAAAAnswerChunks(rawFrame)
+		if err != nil {
+			return nil, err
+		}
+
+		return BuildResponsePacket(origQType, questionPacket, answerName, answerPayloads)
+	} else {
+		return nil, fmt.Errorf("Bad origQType")
+	}
 }
 
-func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answerPayload []byte) ([]byte, error) {
+func buildSingleResponsePacket(qType uint16, questionPacket []byte, answerName string, answerPayload []byte) ([]byte, error) {
 	if len(questionPacket) < dnsHeaderSize {
 		return nil, ErrPacketTooShort
 	}
@@ -310,7 +300,7 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 	offset := dnsHeaderSize
 	offset += copy(response[offset:], questionBytes)
 	offset += copy(response[offset:], nameBytes)
-	binary.BigEndian.PutUint16(response[offset:offset+2], Enums.DNS_RECORD_TYPE_TXT)
+	binary.BigEndian.PutUint16(response[offset:offset+2], qType)
 	binary.BigEndian.PutUint16(response[offset+2:offset+4], Enums.DNSQ_CLASS_IN)
 	binary.BigEndian.PutUint32(response[offset+4:offset+8], 0)
 	binary.BigEndian.PutUint16(response[offset+8:offset+10], uint16(len(answerPayload)))
@@ -331,6 +321,10 @@ func responseAnswerNameBytes(questionPacket []byte, answerName string) ([]byte, 
 	}
 	return encodeDNSNameStrict(answerName)
 }
+
+//=============================================================================================//
+// Parse response
+//=============================================================================================//
 
 func extractFirstQuestionNameWire(packet []byte) ([]byte, string, bool) {
 	if len(packet) < dnsHeaderSize {
@@ -361,12 +355,22 @@ func ExtractVPNResponse(packet []byte, baseEncoded bool) (VpnProto.Packet, error
 		return VpnProto.Packet{}, err
 	}
 
-	rawAnswers := extractTXTAnswerPayloads(parsed)
+	rawAnswers, rType := extractAnswerPayloads(parsed)
 	if len(rawAnswers) == 0 {
-		return VpnProto.Packet{}, ErrTXTAnswerMissing
+		return VpnProto.Packet{}, ErrAnswerMissing
 	}
 
-	return assembleVPNResponse(rawAnswers, baseEncoded)
+	if rType == Enums.DNS_RECORD_TYPE_TXT {
+		return assembleVPNResponse(rawAnswers, baseEncoded)
+	} else if rType == Enums.DNS_RECORD_TYPE_AAAA {
+		raw, err := ExtractAAAABytes(rawAnswers)
+		if err != nil {
+			return VpnProto.Packet{}, err
+		}
+		return VpnProto.ParseInflated(raw)
+	} else {
+		return VpnProto.Packet{}, ErrAnswerMissing
+	}
 }
 
 func DescribeResponseWithoutTunnelPayload(packet []byte) string {
@@ -505,7 +509,7 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 		totalChunks += (remaining + maxChunkNData - 1) / maxChunkNData
 	}
 	if totalChunks > 255 {
-		return nil, ErrTXTAnswerTooLarge
+		return nil, ErrAnswerTooLarge
 	}
 
 	chunks := make([][]byte, 0, totalChunks)
@@ -589,23 +593,30 @@ func appendLengthPrefixedBase64TXT(data []byte) []byte {
 	return out
 }
 
-func extractTXTAnswerPayloads(parsed Packet) [][]byte {
+func extractAnswerPayloads(parsed Packet) ([][]byte, uint16) {
 	if len(parsed.Answers) == 0 {
-		return nil
+		return nil, 0
 	}
+
+	answerType := parsed.Answers[0].Type
 
 	payloads := make([][]byte, 0, len(parsed.Answers))
 	for _, answer := range parsed.Answers {
-		if answer.Type != Enums.DNS_RECORD_TYPE_TXT {
+		if answer.Type != answerType {
 			continue
 		}
-		raw := extractTXTBytes(answer.RData)
-		if len(raw) == 0 {
-			continue
+		if answerType == Enums.DNS_RECORD_TYPE_TXT {
+			raw := extractTXTBytes(answer.RData)
+			if len(raw) == 0 {
+				continue
+			}
+			payloads = append(payloads, raw)
+		} else if answerType == Enums.DNS_RECORD_TYPE_AAAA {
+			payloads = append(payloads, answer.RData)
 		}
-		payloads = append(payloads, raw)
 	}
-	return payloads
+
+	return payloads, answerType
 }
 
 func extractTXTBytes(rData []byte) []byte {
@@ -686,11 +697,11 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 
 		if raw[0] == 0x00 {
 			if len(raw) < 3 {
-				return VpnProto.Packet{}, ErrTXTAnswerMalformed
+				return VpnProto.Packet{}, ErrAnswerMalformed
 			}
 			totalExpected = int(raw[1])
 			if totalExpected <= 0 || totalExpected > len(chunks) {
-				return VpnProto.Packet{}, ErrTXTAnswerMalformed
+				return VpnProto.Packet{}, ErrAnswerMalformed
 			}
 			parsed, err := VpnProto.ParseAtOffset(raw, 2)
 			if err != nil {
@@ -707,7 +718,7 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 
 		chunkID := int(raw[0])
 		if chunkID >= len(chunks) {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return VpnProto.Packet{}, ErrAnswerMalformed
 		}
 		if chunks[chunkID] == nil {
 			seenChunks++
@@ -716,16 +727,16 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 	}
 
 	if !headerSeen || totalExpected <= 0 || seenChunks != totalExpected {
-		return VpnProto.Packet{}, ErrTXTAnswerMalformed
+		return VpnProto.Packet{}, ErrAnswerMalformed
 	}
 	for i := range totalExpected {
 		if chunks[i] == nil {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return VpnProto.Packet{}, ErrAnswerMalformed
 		}
 	}
 	for i := totalExpected; i < len(chunks); i++ {
 		if chunks[i] != nil {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return VpnProto.Packet{}, ErrAnswerMalformed
 		}
 	}
 

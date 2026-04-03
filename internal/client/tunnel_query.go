@@ -20,8 +20,24 @@ type preparedTunnelDomain struct {
 	qname      []byte
 }
 
-func buildTunnelTXTQuestionBytes(domain string, encoded []byte) ([]byte, error) {
-	return DnsParser.BuildTunnelTXTQuestionPacket(domain, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+func buildTunnelQuestionBytesPrepared(tunnelQType string, domain preparedTunnelDomain, encoded []byte) ([]byte, error) {
+	qType := uint16(0)
+	if tunnelQType == "AAAA" {
+		qType = Enums.DNS_RECORD_TYPE_AAAA
+	} else {
+		qType = Enums.DNS_RECORD_TYPE_TXT
+	}
+	return DnsParser.BuildTunnelQuestionPacketPrepared(domain.normalized, domain.qname, encoded, qType, EDnsSafeUDPSize)
+}
+
+func buildTunnelQuestionBytes(tunnelQType string, domain string, encoded []byte) ([]byte, error) {
+	qType := uint16(0)
+	if tunnelQType == "AAAA" {
+		qType = Enums.DNS_RECORD_TYPE_AAAA
+	} else {
+		qType = Enums.DNS_RECORD_TYPE_TXT
+	}
+	return DnsParser.BuildTunnelQuestionPacket(domain, encoded, qType, EDnsSafeUDPSize)
 }
 
 func prepareTunnelDomain(domain string) (preparedTunnelDomain, error) {
@@ -35,12 +51,8 @@ func prepareTunnelDomain(domain string) (preparedTunnelDomain, error) {
 	return preparedTunnelDomain{normalized: normalized, qname: qname}, nil
 }
 
-func buildTunnelTXTQuestionBytesPrepared(domain preparedTunnelDomain, encoded []byte) ([]byte, error) {
-	return DnsParser.BuildTunnelTXTQuestionPacketPrepared(domain.normalized, domain.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
-}
-
-// buildTunnelTXTQueryRaw builds an encoded tunnel query using the provided options and codec.
-func (c *Client) buildTunnelTXTQueryRaw(domain string, options VpnProto.BuildOptions) ([]byte, error) {
+// buildTunnelQueryRaw builds an encoded tunnel query using the provided options and codec.
+func (c *Client) buildTunnelQueryRaw(domain string, options VpnProto.BuildOptions) ([]byte, error) {
 	raw, err := VpnProto.BuildRaw(options)
 	if err != nil {
 		return nil, err
@@ -49,7 +61,7 @@ func (c *Client) buildTunnelTXTQueryRaw(domain string, options VpnProto.BuildOpt
 	if err != nil {
 		return nil, err
 	}
-	return buildTunnelTXTQuestionBytes(domain, encoded)
+	return buildTunnelQuestionBytes(c.TunnelQType, domain, encoded)
 }
 
 func (c *Client) buildEncodedAutoWithCompressionTrace(options VpnProto.BuildOptions) ([]byte, error) {
@@ -62,13 +74,4 @@ func (c *Client) buildEncodedAutoWithCompressionTrace(options VpnProto.BuildOpti
 		return nil, VpnProto.ErrCodecUnavailable
 	}
 	return c.codec.EncryptAndEncodeBytes(raw)
-}
-
-// buildTunnelTXTQuery builds an encoded tunnel query with automatic option handling.
-func (c *Client) buildTunnelTXTQuery(domain string, options VpnProto.BuildOptions) ([]byte, error) {
-	encoded, err := c.buildEncodedAutoWithCompressionTrace(options)
-	if err != nil {
-		return nil, err
-	}
-	return buildTunnelTXTQuestionBytes(domain, encoded)
 }

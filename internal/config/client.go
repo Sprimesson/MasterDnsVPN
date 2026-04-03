@@ -113,6 +113,8 @@ type ClientConfig struct {
 	ARQDataNackRepeatSeconds              float64           `toml:"ARQ_DATA_NACK_REPEAT_SECONDS"`
 	ARQTerminalDrainTimeoutSec            float64           `toml:"ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS"`
 	ARQTerminalAckWaitTimeoutSec          float64           `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
+	SOCKS5NoIPv6                          bool              `toml:"SOCKS5_NO_IPV6"`
+	TunnelQType                           string            `toml:"TUNNEL_QTYPE"`
 	Resolvers                             []ResolverAddress `toml:"-"`
 	ResolverMap                           map[string]int    `toml:"-"`
 }
@@ -212,6 +214,7 @@ func defaultClientConfig() ClientConfig {
 		ARQDataNackRepeatSeconds:              1.0,
 		ARQTerminalDrainTimeoutSec:            120.0,
 		ARQTerminalAckWaitTimeoutSec:          90.0,
+		SOCKS5NoIPv6:                          false,
 	}
 }
 
@@ -464,6 +467,15 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.MTURemovedServerLogFormat = strings.TrimSpace(cfg.MTURemovedServerLogFormat)
 	cfg.MTUAddedServerLogFormat = strings.TrimSpace(cfg.MTUAddedServerLogFormat)
 	cfg.MTUReactiveAddedServerLogFormat = strings.TrimSpace(cfg.MTUReactiveAddedServerLogFormat)
+
+	switch cfg.TunnelQType {
+	case "":
+		cfg.TunnelQType = "TXT"
+	case "TXT", "AAAA":
+		// ok
+	default:
+		return cfg, fmt.Errorf("bad cfg.TunnelQType: %s", cfg.TunnelQType)
+	}
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)
 	if cfg.EncryptionKey == "" {

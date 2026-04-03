@@ -226,6 +226,12 @@ func (c *Client) handleSOCKS5Request(ctx context.Context, conn net.Conn) {
 		}
 
 		addr = net.IP(ip).String()
+
+		if c.socks5NoIPv6 {
+			c.log.Warnf("🔒 <red>IPv6 disabled for SOCKS5 host, rejecting: %s</red>", addr)
+			_ = conn.Close()
+			return
+		}
 	default:
 		_ = conn.Close()
 		return

@@ -459,7 +459,7 @@ func (c *Client) buildSessionQuery(domain string, packetType uint8, payload []by
 }
 
 func (c *Client) buildTunnelQuery(domain string, sessionID uint8, packetType uint8, payload []byte) ([]byte, error) {
-	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
+	return c.buildTunnelQueryRaw(domain, VpnProto.BuildOptions{
 		SessionID:  sessionID,
 		PacketType: packetType,
 		Payload:    payload,
@@ -555,7 +555,7 @@ func (c *Client) sendSessionCloseRound(targets []Connection, deadline time.Time)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			query, err := c.buildTunnelTXTQueryRaw(conn.Domain, VpnProto.BuildOptions{
+			query, err := c.buildTunnelQueryRaw(conn.Domain, VpnProto.BuildOptions{
 				SessionID:     c.sessionID,
 				SessionCookie: c.sessionCookie,
 				PacketType:    Enums.PACKET_SESSION_CLOSE,

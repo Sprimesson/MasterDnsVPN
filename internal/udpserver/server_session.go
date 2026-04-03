@@ -285,7 +285,10 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, re
 
 	if pkt, ok := s.dequeueSessionResponse(sessionID, now); ok {
 		if s.extLogDispatch {
-			s.log.Debugf("Dequed outgoung packet of type %d", int(pkt.PacketType))
+			s.log.Debugf(" << %d (%d/%d) | %d/%d/%d | (%d) %x",
+				pkt.PacketType, pkt.SessionID, pkt.StreamID,
+				pkt.SequenceNum, pkt.FragmentID, pkt.TotalFragments,
+				len(pkt.Payload), pkt.Payload)
 		}
 
 		return s.buildSessionVPNResponse(questionPacket, requestName, record, *pkt)
@@ -294,7 +297,7 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, re
 	payload := s.nextPongPayload()
 
 	if s.extLogDispatch {
-		s.log.Debugf("Send outgoung PONG")
+		s.log.Debugf(" << pong")
 	}
 
 	return s.buildSessionVPNResponse(questionPacket, requestName, record, VpnProto.Packet{
@@ -486,6 +489,15 @@ func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXP
 				if !ok {
 					return false
 				}
+
+				if s.log != nil && s.extLogDispatch {
+					s.log.Debugf(
+						" <<<%d (%d/%d) | %d/%d/%d | (%d) %x",
+						popped.PacketType, popped.SessionID, popped.StreamID,
+						popped.SequenceNum, popped.FragmentID, popped.TotalFragments,
+						len(popped.Payload), popped.Payload)
+				}
+
 				payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 				blocks++
 			}

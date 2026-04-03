@@ -52,6 +52,7 @@ type Client struct {
 	resolverHealth      map[string]*resolverHealthState
 	resolverRecheck     map[string]resolverRecheckState
 	runtimeDisabled     map[string]resolverDisabledState
+	resolverRecheckSem  chan struct{}
 	nowFn               func() time.Time
 	recheckConnectionFn func(conn *Connection) bool
 
@@ -240,6 +241,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		resolverHealth:                        make(map[string]*resolverHealthState),
 		resolverRecheck:                       make(map[string]resolverRecheckState),
 		runtimeDisabled:                       make(map[string]resolverDisabledState),
+		resolverRecheckSem:                    make(chan struct{}, max(1, cfg.RecheckBatchSize)),
 		mtuTestRetries:                        cfg.MTUTestRetries,
 		mtuTestTimeout:                        time.Duration(cfg.MTUTestTimeout * float64(time.Second)),
 		mtuSaveToFile:                         cfg.SaveMTUServersToFile,

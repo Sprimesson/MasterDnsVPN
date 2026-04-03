@@ -553,15 +553,23 @@ func (c *Client) runResolverRecheckBatch(ctx context.Context, now time.Time) {
 		if !ok || conn.IsValid {
 			continue
 		}
+		if !c.tryAcquireResolverRecheckSlot() {
+			break
+		}
 		c.resolverHealthMu.Lock()
 		if m, ok := c.resolverRecheck[candidate.key]; ok {
 			m.InFlight = true
 			c.resolverRecheck[candidate.key] = m
+		} else {
+			c.resolverHealthMu.Unlock()
+			c.releaseResolverRecheckSlot()
+			continue
 		}
 		c.resolverHealthMu.Unlock()
 
 		go func(cand resolverRecheckCandidate, cn Connection) {
 			defer func() {
+				c.releaseResolverRecheckSlot()
 				if r := recover(); r != nil {
 					c.scheduleResolverRecheckFailure(cand.key, cand.runtimePriority, c.now())
 				}
@@ -576,6 +584,28 @@ func (c *Client) runResolverRecheckBatch(ctx context.Context, now time.Time) {
 
 			c.scheduleResolverRecheckFailure(cand.key, cand.runtimePriority, c.now())
 		}(candidate, conn)
+	}
+}
+
+func (c *Client) tryAcquireResolverRecheckSlot() bool {
+	if c == nil || c.resolverRecheckSem == nil {
+		return true
+	}
+	select {
+	case c.resolverRecheckSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) releaseResolverRecheckSlot() {
+	if c == nil || c.resolverRecheckSem == nil {
+		return
+	}
+	select {
+	case <-c.resolverRecheckSem:
+	default:
 	}
 }
 

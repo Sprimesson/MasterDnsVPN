@@ -1070,7 +1070,7 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn Connection, prob
 }
 
 func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
-	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
+	return c.buildTunnelQueryRaw(domain, VpnProto.BuildOptions{
 		SessionID:      255,
 		PacketType:     packetType,
 		StreamID:       1,

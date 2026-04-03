@@ -350,8 +350,8 @@ func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn
 		state:        StateOpen,
 		lastActivity: time.Now(),
 
-		windowSize:    windowSize,
-		limit:         limit,
+		windowSize:     windowSize,
+		limit:          limit,
 		windowNotFull:  make(chan struct{}, 1),
 		writeLock:      sync.Mutex{},
 		flushSignal:    make(chan struct{}, 1),
@@ -2426,6 +2426,13 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 	}
 }
 
+func Btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------
 // Final Close Path
 // ---------------------------------------------------------------------
@@ -2474,19 +2481,19 @@ func (a *ARQ) finalizeClose(reason string) {
 	a.mu.Unlock()
 
 	a.logger.Debugf(
-		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | CloseRead: %t/%t/%t | RST: %t/%t/%t",
+		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | CloseRead: %d%d%d | RST: %d%d%d",
 		a.sessionID,
 		a.streamID,
 		reason,
 		prevState,
 		sndBufLen,
 		rcvBufLen,
-		closeReadSent,
-		closeReadReceived,
-		closeReadAcked,
-		rstSent,
-		rstReceived,
-		rstAcked,
+		Btoi(closeReadSent),
+		Btoi(closeReadReceived),
+		Btoi(closeReadAcked),
+		Btoi(rstSent),
+		Btoi(rstReceived),
+		Btoi(rstAcked),
 	)
 
 	if owner, ok := a.enqueuer.(terminalOwner); ok {

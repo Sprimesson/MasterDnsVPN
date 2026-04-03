@@ -54,10 +54,6 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 		return s.buildNoDataResponseLiteLogged(packet, parsed, "vpn-proto-parse-failed")
 	}
 
-	if s.extLogDispatch {
-		s.log.Debugf("Dispatch incoming packet of type %d", int(vpnPacket.PacketType))
-	}
-
 	if vpnPacket.PacketType == Enums.PACKET_SESSION_CLOSE {
 		s.handleSessionCloseNotice(vpnPacket, time.Now())
 		return nil

@@ -2675,6 +2675,13 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 	a.mu.Unlock()
 }
 
+func Btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------
 // Final Close Path
 // ---------------------------------------------------------------------
@@ -2748,7 +2755,7 @@ func (a *ARQ) finalizeClose(reason string) {
 	a.mu.Unlock()
 
 	a.logger.Debugf(
-		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PriorReason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | ControlSndBuf: %d | ContigRcv: %d | PendingInbound: %d | RxQueue: %d/%d | RcvNxt: %d | LocalWrite: pending=%t closed=%t broken=%t | CloseRead: %t/%t/%t | CloseWrite: %t/%t/%t | WaitingAck: %t/%s/%s | Deferred: %t/%s/%s | IO: ready=%t stopRead=%t workers=%t | RST: %t/%t/%t | Since: lastActivity=%s clientEOF=%s closeReadAcked=%s",
+		"ARQ Stream Closed | Session: %d | Stream: %d | Reason: %s | PriorReason: %s | PrevState: %d | SndBuf: %d | RcvBuf: %d | ControlSndBuf: %d | ContigRcv: %d | PendingInbound: %d | RxQueue: %d/%d | RcvNxt: %d | LocalWrite: pending=%d closed=%d broken=%d | CloseRead: %d/%d/%d | CloseWrite: %d/%d/%d | WaitingAck: %d/%s/%s | Deferred: %d/%s/%s | IO: ready=%d stopRead=%d workers=%d | RST: %d/%d/%d | Since: lastActivity=%s clientEOF=%s closeReadAcked=%s",
 		a.sessionID,
 		a.streamID,
 		reason,
@@ -2762,27 +2769,27 @@ func (a *ARQ) finalizeClose(reason string) {
 		rxQueueLen,
 		rxQueueCap,
 		rcvNxt,
-		localWritePending,
-		localWriteClosed,
-		localWriterBroken,
-		closeReadSent,
-		closeReadReceived,
-		closeReadAcked,
-		closeWriteSent,
-		closeWriteReceived,
-		closeWriteAcked,
-		waitingAck,
+		Btoi(localWritePending),
+		Btoi(localWriteClosed),
+		Btoi(localWriterBroken),
+		Btoi(closeReadSent),
+		Btoi(closeReadReceived),
+		Btoi(closeReadAcked),
+		Btoi(closeWriteSent),
+		Btoi(closeWriteReceived),
+		Btoi(closeWriteAcked),
+		Btoi(waitingAck),
 		Enums.PacketTypeName(waitingAckFor),
 		ackDeadlineIn,
-		deferredClose,
+		Btoi(deferredClose),
 		Enums.PacketTypeName(deferredPacket),
 		deferredDeadlineIn,
-		ioReady,
-		stopLocalRead,
-		streamWorkersStarted,
-		rstSent,
-		rstReceived,
-		rstAcked,
+		Btoi(ioReady),
+		Btoi(stopLocalRead),
+		Btoi(streamWorkersStarted),
+		Btoi(rstSent),
+		Btoi(rstReceived),
+		Btoi(rstAcked),
 		lastActivityAgo,
 		clientEOFAgo,
 		closeReadAckedAgo,

@@ -93,9 +93,9 @@ func main() {
 
 	var log *logger.Logger
 	if *logPath != "" {
-		log = logger.NewWithFile("MDVS", cfg.LogLevel, *logPath)
+		log = logger.NewWithFile("MDVS2", cfg.LogLevel, *logPath)
 	} else {
-		log = logger.New("MDVS", cfg.LogLevel)
+		log = logger.New("MDVS2", cfg.LogLevel)
 	}
 	log.DisableTime()
 

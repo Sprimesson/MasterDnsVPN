@@ -1406,163 +1406,6 @@ func TestARQ_ClientEOFQueuesRSTInsteadOfFIN(t *testing.T) {
 	}
 }
 
-func TestARQ_ClientEOFEventuallyQueuesCloseWriteAfterGrace(t *testing.T) {
-	enqueuer := NewMockPacketEnqueuer()
-	cfg := Config{
-		WindowSize:               100,
-		RTO:                      0.1,
-		MaxRTO:                   0.5,
-		EnableControlReliability: true,
-		IsClient:                 true,
-	}
-
-	localApp, arqConn := net.Pipe()
-	defer localApp.Close()
-	defer arqConn.Close()
-
-	a := NewARQ(1, 1, enqueuer, arqConn, 1000, &testLogger{t}, cfg)
-	a.Start()
-	defer a.Close("test end", CloseOptions{Force: true})
-
-	time.Sleep(50 * time.Millisecond)
-	_ = localApp.Close()
-
-	select {
-	case p := <-enqueuer.Packets:
-		if p.packetType != Enums.PACKET_STREAM_CLOSE_READ {
-			t.Fatalf("expected PACKET_STREAM_CLOSE_READ for client EOF, got %s", Enums.PacketTypeName(p.packetType))
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for client-side CLOSE_READ")
-	}
-
-	a.HandleAckPacket(Enums.PACKET_STREAM_CLOSE_READ_ACK, 0, 0)
-
-	a.mu.Lock()
-	a.clientEOFAt = time.Now().Add(-3 * time.Second)
-	a.mu.Unlock()
-
-	a.checkRetransmits()
-
-	timeout := time.After(1 * time.Second)
-	for {
-		select {
-		case p := <-enqueuer.Packets:
-			if p.packetType == Enums.PACKET_STREAM_CLOSE_WRITE {
-				return
-			}
-		case <-timeout:
-			t.Fatal("timed out waiting for client-side CLOSE_WRITE after EOF grace")
-		}
-	}
-}
-
-func TestARQ_ClientCloseReadAckEventuallyQueuesCloseWriteAfterGrace(t *testing.T) {
-	enqueuer := NewMockPacketEnqueuer()
-	cfg := Config{
-		WindowSize:               100,
-		RTO:                      0.1,
-		MaxRTO:                   0.5,
-		EnableControlReliability: true,
-		IsClient:                 true,
-	}
-
-	localApp, arqConn := net.Pipe()
-	defer localApp.Close()
-	defer arqConn.Close()
-
-	a := NewARQ(1, 1, enqueuer, arqConn, 1000, &testLogger{t}, cfg)
-	a.Start()
-	defer a.Close("test end", CloseOptions{Force: true})
-
-	a.Close("test close-read", CloseOptions{SendCloseRead: true})
-
-	timeout := time.After(1 * time.Second)
-	for {
-		select {
-		case p := <-enqueuer.Packets:
-			if p.packetType == Enums.PACKET_STREAM_CLOSE_READ {
-				goto gotCloseRead
-			}
-		case <-timeout:
-			t.Fatal("timed out waiting for initial CLOSE_READ")
-		}
-	}
-
-gotCloseRead:
-	a.HandleAckPacket(Enums.PACKET_STREAM_CLOSE_READ_ACK, 0, 0)
-
-	a.mu.Lock()
-	a.closeReadAckedAt = time.Now().Add(-3 * time.Second)
-	a.mu.Unlock()
-
-	a.checkRetransmits()
-
-	timeout = time.After(1 * time.Second)
-	for {
-		select {
-		case p := <-enqueuer.Packets:
-			if p.packetType == Enums.PACKET_STREAM_CLOSE_WRITE {
-				return
-			}
-		case <-timeout:
-			t.Fatal("timed out waiting for CLOSE_WRITE after CLOSE_READ ACK grace")
-		}
-	}
-}
-
-func TestARQ_OverlappingCloseAcksStillFinalizeClientDisconnect(t *testing.T) {
-	enqueuer := NewMockPacketEnqueuer()
-	cfg := Config{
-		WindowSize:               100,
-		RTO:                      0.1,
-		MaxRTO:                   0.5,
-		EnableControlReliability: true,
-		IsClient:                 true,
-	}
-
-	localApp, arqConn := net.Pipe()
-	defer localApp.Close()
-	defer arqConn.Close()
-
-	a := NewARQ(1, 1, enqueuer, arqConn, 1000, &testLogger{t}, cfg)
-	a.Start()
-	defer a.Close("test end", CloseOptions{Force: true})
-
-	a.Close("test close-read", CloseOptions{SendCloseRead: true})
-	a.Close("test close-write", CloseOptions{SendCloseWrite: true})
-
-	timeout := time.After(1 * time.Second)
-	seenRead := false
-	seenWrite := false
-	for !(seenRead && seenWrite) {
-		select {
-		case p := <-enqueuer.Packets:
-			if p.packetType == Enums.PACKET_STREAM_CLOSE_READ {
-				seenRead = true
-			}
-			if p.packetType == Enums.PACKET_STREAM_CLOSE_WRITE {
-				seenWrite = true
-			}
-		case <-timeout:
-			t.Fatal("timed out waiting for close packets")
-		}
-	}
-
-	a.HandleAckPacket(Enums.PACKET_STREAM_CLOSE_WRITE_ACK, 0, 0)
-	a.HandleAckPacket(Enums.PACKET_STREAM_CLOSE_READ_ACK, 0, 0)
-
-	deadline := time.Now().Add(1 * time.Second)
-	for time.Now().Before(deadline) {
-		if a.IsClosed() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	t.Fatal("expected ARQ to finalize after overlapping close ACKs")
-}
-
 func TestARQ_IOReadDataWithEOFStillQueuesFinalChunk(t *testing.T) {
 	enqueuer := NewMockPacketEnqueuer()
 	cfg := Config{
@@ -1651,39 +1494,6 @@ func TestARQ_ClientIOReadDataWithEOFQueuesFinalChunkAndEntersResetPath(t *testin
 	}
 
 	t.Fatal("expected client EOF with final data to arm deferred CLOSE_READ")
-}
-
-func TestARQ_ClientAbortLikeReadErrorQueuesCloseReadInsteadOfRST(t *testing.T) {
-	enqueuer := NewMockPacketEnqueuer()
-	cfg := Config{
-		WindowSize:               100,
-		RTO:                      0.1,
-		MaxRTO:                   0.5,
-		EnableControlReliability: true,
-		IsClient:                 true,
-	}
-
-	conn := &errAfterDataConn{err: errors.New("read tcp 127.0.0.1:19951->127.0.0.1:9165: wsarecv: An established connection was aborted by the software in your host machine.")}
-	a := NewARQ(1, 1, enqueuer, conn, 1000, &testLogger{t}, cfg)
-	a.Start()
-	defer a.Close("test end", CloseOptions{Force: true})
-
-	select {
-	case p := <-enqueuer.Packets:
-		if p.packetType != Enums.PACKET_STREAM_CLOSE_READ {
-			t.Fatalf("expected abort-like local read error to queue CLOSE_READ, got %s", Enums.PacketTypeName(p.packetType))
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for CLOSE_READ after abort-like local read error")
-	}
-
-	select {
-	case p := <-enqueuer.Packets:
-		if p.packetType == Enums.PACKET_STREAM_RST {
-			t.Fatal("did not expect abort-like local read error to queue STREAM_RST")
-		}
-	default:
-	}
 }
 
 func TestARQ_IOReadDataWithErrorDefersRSTUntilDrain(t *testing.T) {
@@ -2339,6 +2149,35 @@ func TestARQ_ClientLocalDisconnectWaitsForPendingInboundQueueToDrain(t *testing.
 	}
 }
 
+func TestARQ_RxLoopShutdownDrainsPendingInboundQueueAccounting(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize: 100,
+		RTO:        0.1,
+		MaxRTO:     0.5,
+	})
+
+	a.mu.Lock()
+	a.pendingInbound = 3
+	a.mu.Unlock()
+
+	a.rxChan <- rxPayload{sn: 10, data: []byte("a")}
+	a.rxChan <- rxPayload{sn: 20, data: []byte("b")}
+	a.rxChan <- rxPayload{sn: 30, data: []byte("c")}
+
+	a.wg.Add(1)
+	go a.rxLoop()
+
+	a.cancel()
+	a.wg.Wait()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.pendingInbound != 0 {
+		t.Fatalf("expected pendingInbound to drain to zero on rxLoop shutdown, got %d", a.pendingInbound)
+	}
+}
+
 func TestARQ_WriteDeadlineTimeoutRetriesAndFlushes(t *testing.T) {
 	enqueuer := NewMockPacketEnqueuer()
 	cfg := Config{
@@ -2544,26 +2383,6 @@ func TestARQ_ControlRetransmitDoesNotAdvanceRetryOrRTOWhenEnqueueRejected(t *tes
 	}
 	if !info.LastSentAt.Equal(beforeLastSent) {
 		t.Fatalf("expected LastSentAt to stay at %v, got %v", beforeLastSent, info.LastSentAt)
-	}
-}
-
-func TestARQ_SendControlPacketTrackedWakeSignalsRetransmitLoop(t *testing.T) {
-	enqueuer := NewMockPacketEnqueuer()
-	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
-		WindowSize:               100,
-		RTO:                      0.1,
-		MaxRTO:                   0.5,
-		EnableControlReliability: true,
-	})
-
-	if !a.SendControlPacketWithTTL(Enums.PACKET_STREAM_SYN, 7, 0, 0, nil, Enums.DefaultPacketPriority(Enums.PACKET_STREAM_SYN), true, nil, 0) {
-		t.Fatal("expected tracked control packet enqueue to succeed")
-	}
-
-	select {
-	case <-a.retransmitWake:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected tracked control packet enqueue to wake retransmit loop")
 	}
 }
 

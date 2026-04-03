@@ -814,6 +814,7 @@ func (a *ARQ) tryFinalizeClientLocalDisconnect() {
 		a.closeReadAcked &&
 		len(a.sndBuf) == 0 &&
 		len(a.rcvBuf) == 0 &&
+		a.pendingInbound == 0 &&
 		!a.localWritePending &&
 		!a.waitingAck &&
 		!a.deferredClose
@@ -1344,7 +1345,23 @@ func (a *ARQ) rxLoop() {
 	for {
 		select {
 		case <-a.ctx.Done():
-			return
+			drained := 0
+			for {
+				select {
+				case <-a.rxChan:
+					drained++
+				default:
+					if drained > 0 {
+						a.mu.Lock()
+						a.pendingInbound -= drained
+						if a.pendingInbound < 0 {
+							a.pendingInbound = 0
+						}
+						a.mu.Unlock()
+					}
+					return
+				}
+			}
 		case payload := <-a.rxChan:
 			// Process the first packet immediately so ACK/flush timing stays
 			// close to the original per-packet path.

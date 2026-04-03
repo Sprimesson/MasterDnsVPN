@@ -205,7 +205,7 @@ func TestExtractVPNResponseReordersChunkedAnswers(t *testing.T) {
 	copy(reordered, chunks)
 	reordered[1], reordered[2] = reordered[2], reordered[1]
 
-	response, err := BuildTXTResponsePacket(query, "x.v.example.com", reordered)
+	response, err := BuildResponsePacket(query, "x.v.example.com", reordered)
 	if err != nil {
 		t.Fatalf("BuildTXTResponsePacket returned error: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildTXTAnswerChunksRejectsTooManyChunks(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected chunk overflow error, got nil")
 	}
-	if !errors.Is(err, ErrTXTAnswerTooLarge) {
+	if !errors.Is(err, ErrAnswerTooLarge) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -289,7 +289,7 @@ func TestBuildTunnelTXTQuestionPacketMatchesLegacyQuestionBuilder(t *testing.T) 
 		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
 	}
 
-	direct, err := BuildTunnelTXTQuestionPacket("v.example.com", encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
+	direct, err := BuildTunnelQuestionPacket("v.example.com", encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
 		t.Fatalf("BuildTunnelTXTQuestionPacket returned error: %v", err)
 	}
@@ -313,12 +313,12 @@ func TestBuildTunnelTXTQuestionPacketPreparedMatchesDirectBuilder(t *testing.T) 
 		t.Fatalf("unexpected normalized domain: %q", normalized)
 	}
 
-	direct, err := BuildTunnelTXTQuestionPacket("v.example.com", encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
+	direct, err := BuildTunnelQuestionPacket("v.example.com", encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
 		t.Fatalf("BuildTunnelTXTQuestionPacket returned error: %v", err)
 	}
 
-	prepared, err := BuildTunnelTXTQuestionPacketPrepared(normalized, qname, encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
+	prepared, err := BuildTunnelQuestionPacketPrepared(normalized, qname, encoded, Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
 		t.Fatalf("BuildTunnelTXTQuestionPacketPrepared returned error: %v", err)
 	}

@@ -5,5 +5,6 @@ SERVICE_NAME=masterdnsvpn2
 SERVICE_DIR=/opt/masterdnsvpn2
 SERVICE_BIN=mdvserver2
 
-DEPLOY_VER=Spr21
+DEPLOY_VER=Spr22i6
+
 DEST_DIR=/mnt/c/Projects/denerastin/spr2x/MasterDnsVPN_Client

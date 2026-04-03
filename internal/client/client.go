@@ -139,7 +139,11 @@ type Client struct {
 	localDNSCacheFlushOnce sync.Once
 
 	// SOCKS5 brute-force rate limiter
-	socksRateLimit  *socksRateLimiter
+	socksRateLimit *socksRateLimiter
+
+	// Extra options
+	socks5NoIPv6    bool
+	TunnelQType     string
 	maxActiveStream uint16
 	extLogDispatch  bool
 	extLogSocks     bool
@@ -281,6 +285,8 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		orphanQueue:            mlq.New[VpnProto.Packet](cfg.OrphanQueueInitialCapacity),
 		sessionResetSignal:     make(chan struct{}, 1),
 		socksRateLimit:         newSocksRateLimiter(),
+		socks5NoIPv6:           cfg.SOCKS5NoIPv6,
+		TunnelQType:            cfg.TunnelQType,
 		maxActiveStream:        64,
 		extLogDispatch:         false,
 		extLogSocks:            false,

@@ -519,7 +519,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 				var dnsPacket []byte
 				switch {
 				case firstDNSPacket == nil:
-					dnsPacket, err = buildTunnelTXTQuestionBytesPrepared(prepared, encoded)
+					dnsPacket, err = buildTunnelQuestionBytesPrepared(c.TunnelQType, prepared, encoded)
 					if err != nil {
 						continue
 					}
@@ -534,7 +534,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 					var cached bool
 					dnsPacket, cached = packetByDomain[domain]
 					if !cached {
-						dnsPacket, err = buildTunnelTXTQuestionBytesPrepared(prepared, encoded)
+						dnsPacket, err = buildTunnelQuestionBytesPrepared(c.TunnelQType, prepared, encoded)
 						if err != nil {
 							continue
 						}
@@ -631,7 +631,7 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	// 1. Extract VPN Packet from DNS Response
 	vpnPacket, err := DnsParser.ExtractVPNResponse(data, c.responseMode == mtuProbeBase64Reply)
 	if err != nil {
-		if errors.Is(err, DnsParser.ErrTXTAnswerMissing) {
+		if errors.Is(err, DnsParser.ErrAnswerMissing) {
 			receivedAt := time.Now()
 			if parsed, parseErr := DnsParser.ParsePacketLite(data); parseErr == nil && parsed.Header.RCode != 0 {
 				c.trackResolverFailure(data, addr, receivedAt)

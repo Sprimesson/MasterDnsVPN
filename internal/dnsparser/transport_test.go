@@ -176,6 +176,40 @@ func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
 	}
 }
 
+func TestBuildVPNResponsePacketPreservesOriginalQuestionCaseInAnswerName(t *testing.T) {
+	query, err := BuildTXTQuestionPacket("ANHfwjAU21.aa.CoM", Enums.DNS_RECORD_TYPE_TXT, 4096)
+	if err != nil {
+		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
+	}
+
+	response, err := BuildVPNResponsePacket(query, "anhfwjau21.aa.com", VpnProto.Packet{
+		SessionID:  9,
+		PacketType: Enums.PACKET_MTU_UP_RES,
+		Payload:    []byte("challenge"),
+	}, false)
+	if err != nil {
+		t.Fatalf("BuildVPNResponsePacket returned error: %v", err)
+	}
+
+	parsed, err := ParsePacket(response)
+	if err != nil {
+		t.Fatalf("ParsePacket(response) returned error: %v", err)
+	}
+	if len(parsed.Answers) != 1 {
+		t.Fatalf("unexpected answer count: got=%d want=1", len(parsed.Answers))
+	}
+	if parsed.Answers[0].Name != "anhfwjau21.aa.com" {
+		t.Fatalf("unexpected parsed answer name: got=%q want=%q", parsed.Answers[0].Name, "anhfwjau21.aa.com")
+	}
+
+	rawMixedCase := encodeDNSName("ANHfwjAU21.aa.CoM")
+	questionEnd := dnsHeaderSize + len(rawMixedCase) + 4
+	answerStart := questionEnd
+	if !bytes.Equal(response[answerStart:answerStart+len(rawMixedCase)], rawMixedCase) {
+		t.Fatal("answer owner name must preserve original question wire casing")
+	}
+}
+
 func TestExtractVPNResponseReordersChunkedAnswers(t *testing.T) {
 	query, err := BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {

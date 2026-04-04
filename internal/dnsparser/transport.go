@@ -201,7 +201,7 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
 	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
 
-	nameBytes, err := encodeDNSNameStrict(answerName)
+	nameBytes, err := responseAnswerNameBytes(questionPacket, answerName)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
 	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
 
-	nameBytes, err := encodeDNSNameStrict(answerName)
+	nameBytes, err := responseAnswerNameBytes(questionPacket, answerName)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +320,37 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 	}
 
 	return response, nil
+}
+
+func responseAnswerNameBytes(questionPacket []byte, answerName string) ([]byte, error) {
+	rawName, parsedName, ok := extractFirstQuestionNameWire(questionPacket)
+	if ok && sameDNSName(parsedName, answerName) {
+		return rawName, nil
+	}
+	return encodeDNSNameStrict(answerName)
+}
+
+func extractFirstQuestionNameWire(packet []byte) ([]byte, string, bool) {
+	if len(packet) < dnsHeaderSize {
+		return nil, "", false
+	}
+	header := parseHeader(packet)
+	if header.QDCount == 0 {
+		return nil, "", false
+	}
+
+	name, nextOffset, err := parseName(packet, dnsHeaderSize)
+	if err != nil || nextOffset <= dnsHeaderSize || nextOffset > len(packet) {
+		return nil, "", false
+	}
+
+	return packet[dnsHeaderSize:nextOffset], name, true
+}
+
+func sameDNSName(a string, b string) bool {
+	a = strings.TrimSuffix(a, ".")
+	b = strings.TrimSuffix(b, ".")
+	return strings.EqualFold(a, b)
 }
 
 func ExtractVPNResponse(packet []byte, baseEncoded bool) (VpnProto.Packet, error) {

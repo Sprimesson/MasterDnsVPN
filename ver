@@ -5,6 +5,6 @@ SERVICE_NAME=masterdnsvpn3
 SERVICE_DIR=/opt/masterdnsvpn3
 SERVICE_BIN=mdvserver3
 
-DEPLOY_VER=Spr31i6D
+DEPLOY_VER=Spr32i6D
 
 DEST_DIR=/mnt/c/Projects/denerastin/spr2x/MasterDnsVPN_Client

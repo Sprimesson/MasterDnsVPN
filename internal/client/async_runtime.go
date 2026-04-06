@@ -927,7 +927,11 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr, localAddr s
 	c.NotifyPacket(vpnPacket.PacketType, true)
 
 	if c.IsExtLogDispatch() {
-		c.Log().Debugf("Dispatch incoming packet of type %d", int(vpnPacket.PacketType))
+		c.log.Debugf(
+			">>  %d (%d/%d) | %d/%d/%d | (%d) %x",
+			vpnPacket.PacketType, vpnPacket.SessionID, vpnPacket.StreamID,
+			vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments,
+			len(vpnPacket.Payload), vpnPacket.Payload)
 	}
 
 	// 3. Queue deterministic non-data ACKs before any handler logic runs.

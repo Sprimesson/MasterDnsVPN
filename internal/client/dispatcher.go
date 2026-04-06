@@ -253,8 +253,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			payload := make([]byte, 0, maxBlocks*VpnProto.PackedControlBlockSize)
 			payload = VpnProto.AppendPackedControlBlock(payload, item.PacketType, selectedStreamID, item.SequenceNum, item.FragmentID, item.TotalFragments)
 			if c.log != nil && c.extLogDispatch {
-				c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
-					c.sessionID, selectedStreamID, item.PacketType, item.SequenceNum, item.FragmentID, item.TotalFragments)
+				c.log.Debugf(
+					" <<<%d (%d/%d) | %d/%d/%d | {0}",
+					item.PacketType, c.sessionID, selectedStreamID,
+					item.SequenceNum, item.FragmentID, item.TotalFragments)
 			}
 			blocks := 1
 
@@ -271,8 +273,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 					selected.NoteTXPacketDequeued(popped)
 					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, selected.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 					if c.log != nil && c.extLogDispatch {
-						c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
-							c.sessionID, selected.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+						c.log.Debugf(
+							" <<<%d (%d/%d) | %d/%d/%d | {1}",
+							popped.PacketType, c.sessionID, selected.StreamID,
+							popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 					}
 					blocks++
 					selected.ReleaseTXPacket(popped)
@@ -289,8 +293,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 					}
 					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 					if c.log != nil && c.extLogDispatch {
-						c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
-							c.sessionID, popped.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+						c.log.Debugf(
+							" <<<%d (%d/%d) | %d/%d/%d | {2}",
+							popped.PacketType, c.sessionID, popped.StreamID,
+							popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 					}
 					blocks++
 				}
@@ -317,8 +323,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 							}
 							payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 							if c.log != nil && c.extLogDispatch {
-								c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
-									c.sessionID, popped.StreamID, popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+								c.log.Debugf(
+									" <<<%d (%d/%d) | %d/%d/%d | {3}",
+									popped.PacketType, c.sessionID, otherID,
+									popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 							}
 							blocks++
 						}
@@ -341,8 +349,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 						otherStream.NoteTXPacketDequeued(popped)
 						payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, uint16(otherID), popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 						if c.log != nil && c.extLogDispatch {
-							c.log.Debugf("📦 dispatch[packed] | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d",
-								c.sessionID, uint16(otherID), popped.PacketType, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+							c.log.Debugf(
+								" <<<%d (%d/%d) | %d/%d/%d | {4}",
+								popped.PacketType, c.sessionID, otherID,
+								popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 						}
 						blocks++
 						otherStream.ReleaseTXPacket(popped)
@@ -368,8 +378,10 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		}
 
 		if c.extLogDispatch && !wasPacked && c.log != nil {
-			c.log.Debugf("📤-dispatch | Session: %d | StreamID: %d | PacketType: %d | Seq: %d | Frag: %d/%d | Payload(%d): %x",
-				c.sessionID, selectedStreamID, item.PacketType, item.SequenceNum, item.FragmentID, item.TotalFragments,
+			c.log.Debugf(
+				" << %d (%d/%d) | %d/%d/%d | (%d) %x",
+				item.PacketType, c.sessionID, selectedStreamID,
+				item.SequenceNum, item.FragmentID, item.TotalFragments,
 				len(item.Payload), item.Payload)
 		}
 

@@ -28,3 +28,4 @@ build/
 /server
 /mdvserver*
 client_config_sample.toml
+/logs

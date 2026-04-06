@@ -519,7 +519,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 				var dnsPacket []byte
 				switch {
 				case firstDNSPacket == nil:
-					dnsPacket, err = buildTunnelQuestionBytesPrepared(c.TunnelQType, prepared, encoded)
+					dnsPacket, err = buildTunnelQuestionBytesPrepared(c.tunnelQType, prepared, encoded)
 					if err != nil {
 						continue
 					}
@@ -534,7 +534,7 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 					var cached bool
 					dnsPacket, cached = packetByDomain[domain]
 					if !cached {
-						dnsPacket, err = buildTunnelQuestionBytesPrepared(c.TunnelQType, prepared, encoded)
+						dnsPacket, err = buildTunnelQuestionBytesPrepared(c.tunnelQType, prepared, encoded)
 						if err != nil {
 							continue
 						}
@@ -660,7 +660,11 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	c.NotifyPacket(vpnPacket.PacketType, true)
 
 	if c.IsExtLogDispatch() {
-		c.Log().Debugf("Dispatch incoming packet of type %d", int(vpnPacket.PacketType))
+		c.log.Debugf(
+			">>  %d (%d/%d) | %d/%d/%d | (%d) %x",
+			vpnPacket.PacketType, vpnPacket.SessionID, vpnPacket.StreamID,
+			vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments,
+			len(vpnPacket.Payload), vpnPacket.Payload)
 	}
 
 	// 3. Queue deterministic non-data ACKs before any handler logic runs.

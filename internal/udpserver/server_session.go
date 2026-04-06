@@ -286,7 +286,7 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, re
 	if pkt, ok := s.dequeueSessionResponse(sessionID, now); ok {
 		if s.extLogDispatch {
 			s.log.Debugf(" << %d (%d/%d) | %d/%d/%d | (%d) %x",
-				pkt.PacketType, pkt.SessionID, pkt.StreamID,
+				pkt.PacketType, sessionID, pkt.StreamID,
 				pkt.SequenceNum, pkt.FragmentID, pkt.TotalFragments,
 				len(pkt.Payload), pkt.Payload)
 		}

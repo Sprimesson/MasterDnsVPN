@@ -230,6 +230,7 @@ func defaultClientConfig() ClientConfig {
 		ARQTerminalDrainTimeoutSec:            90.0,
 		ARQTerminalAckWaitTimeoutSec:          60.0,
 		SOCKS5NoIPv6:                          false,
+		TunnelQType:                           "TXT",
 	}
 }
 

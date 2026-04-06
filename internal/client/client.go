@@ -142,11 +142,10 @@ type Client struct {
 	socksRateLimit *socksRateLimiter
 
 	// Extra options
-	socks5NoIPv6    bool
-	TunnelQType     string
-	maxActiveStream uint16
-	extLogDispatch  bool
-	extLogSocks     bool
+	socks5NoIPv6   bool
+	tunnelQType    string
+	extLogDispatch bool
+	extLogSocks    bool
 }
 
 // clientStreamTXPacket represents a queued packet pending transmission or retransmission.
@@ -300,8 +299,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		sessionResetSignal:     make(chan struct{}, 1),
 		socksRateLimit:         newSocksRateLimiter(),
 		socks5NoIPv6:           cfg.SOCKS5NoIPv6,
-		TunnelQType:            cfg.TunnelQType,
-		maxActiveStream:        64,
+		tunnelQType:            cfg.TunnelQType,
 		extLogDispatch:         false,
 		extLogSocks:            false,
 	}

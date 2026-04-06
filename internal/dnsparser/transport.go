@@ -237,6 +237,7 @@ func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet Vpn
 		return nil, ErrPacketTooShort
 	}
 
+	// TODO : This part is a replication of a step in BuildResponsePacket, buildSingleResponsePacket. Consolidate.
 	header := parseHeader(questionPacket)
 	questionBytes, qCount, _ := extractQuestionSection(questionPacket, header)
 	questions, _, err := parseQuestions(questionBytes, 0, int(qCount))

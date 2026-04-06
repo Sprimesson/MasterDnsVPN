@@ -32,6 +32,7 @@ const (
 	sessionBusyPayloadSize      = 4
 	sessionCloseBurstMaxTargets = 10
 	sessionCloseBurstRounds     = 3
+	sessionFlagImplicitUpAck    = 0x02
 )
 
 func (c *Client) InitializeSession(maxAttempts int) error {
@@ -83,6 +84,7 @@ func (c *Client) initializeSessionOnce() error {
 		}
 
 		c.sessionID = packet.Payload[0]
+		c.implicitAckTracker.InitSessionSalt(c.cfg.EncryptionKey, uint(c.sessionID))
 		c.sessionCookie = packet.Payload[1]
 		c.responseMode = initPayload[0]
 		c.uploadCompression, c.downloadCompression = compression.SplitPair(packet.Payload[2])
@@ -106,8 +108,12 @@ func (c *Client) buildSessionInitPayload() ([]byte, bool, [4]byte, error) {
 	copy(verifyCode[:], randomPart)
 
 	payload := make([]byte, sessionInitPayloadSize)
+	payload[0] = 0
 	if c.cfg.BaseEncodeData {
-		payload[0] = mtuProbeBase64Reply
+		payload[0] |= mtuProbeBase64Reply
+	}
+	if c.implicitUpAck {
+		payload[0] |= sessionFlagImplicitUpAck
 	}
 	payload[1] = compression.PackPair(c.uploadCompression, c.downloadCompression)
 	binary.BigEndian.PutUint16(payload[2:4], uint16(c.syncedUploadMTU))

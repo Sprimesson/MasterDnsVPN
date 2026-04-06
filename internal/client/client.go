@@ -97,6 +97,7 @@ type Client struct {
 	sessionResetSignal  chan struct{}
 	rxDroppedPackets    atomic.Uint64
 	lastRXDropLogUnix   atomic.Int64
+	implicitAckTracker  *VpnProto.AckTracker
 
 	// Async Runtime Workers & Channels
 	asyncWG              sync.WaitGroup
@@ -146,6 +147,7 @@ type Client struct {
 	tunnelQType    string
 	extLogDispatch bool
 	extLogSocks    bool
+	implicitUpAck  bool
 }
 
 // clientStreamTXPacket represents a queued packet pending transmission or retransmission.
@@ -258,6 +260,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		mtuAddedServerLogFormat:               cfg.MTUAddedServerLogFormat,
 		streamResolverFailoverResendThreshold: cfg.StreamResolverFailoverResendThreshold,
 		streamResolverFailoverCooldown:        time.Duration(cfg.StreamResolverFailoverCooldownSec * float64(time.Second)),
+		implicitAckTracker:                    VpnProto.NewAckTracker(log),
 
 		// Workers config
 		tunnelReaderWorkers:   cfg.TunnelReaderWorkers,
@@ -288,6 +291,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		tunnelQType:            cfg.TunnelQType,
 		extLogDispatch:         false,
 		extLogSocks:            false,
+		implicitUpAck:          cfg.ImplicitUpAck,
 	}
 
 	if c.streamResolverFailoverResendThreshold < 1 {

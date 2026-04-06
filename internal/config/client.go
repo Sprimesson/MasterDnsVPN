@@ -120,6 +120,7 @@ type ClientConfig struct {
 	ARQTerminalAckWaitTimeoutSec          float64           `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
 	SOCKS5NoIPv6                          bool              `toml:"SOCKS5_NO_IPV6"`
 	TunnelQType                           string            `toml:"TUNNEL_QTYPE"`
+	ImplicitUpAck                         bool              `tmol:"IMPLICIT_UPLINK_ACK"`
 	Resolvers                             []ResolverAddress `toml:"-"`
 	ResolverMap                           map[string]int    `toml:"-"`
 }
@@ -230,6 +231,7 @@ func defaultClientConfig() ClientConfig {
 		ARQTerminalAckWaitTimeoutSec:          60.0,
 		SOCKS5NoIPv6:                          false,
 		TunnelQType:                           "TXT",
+		ImplicitUpAck:                         false,
 	}
 }
 

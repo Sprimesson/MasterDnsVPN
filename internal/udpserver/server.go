@@ -33,6 +33,7 @@ const (
 	mtuProbeMinDownSize = 30
 	mtuProbeMaxDownSize = 4096
 	sessionAcceptSize   = 7
+	implicitUpAckFlag   = 2
 )
 
 var preSessionPacketTypes = buildPreSessionPacketTypes()
@@ -165,8 +166,8 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 				return make([]byte, cfg.MaxPacketSize)
 			},
 		},
-		extLogDns:      false,
-		extLogDispatch: false,
+		extLogDns:      true,
+		extLogDispatch: true,
 	}
 }
 

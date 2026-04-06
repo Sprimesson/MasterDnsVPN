@@ -559,7 +559,7 @@ func clampMTU(value uint16) uint16 {
 }
 
 func isValidSessionResponseMode(value uint8) bool {
-	return value <= mtuProbeModeBase64
+	return (value & (mtuProbeModeBase64 | implicitUpAckFlag)) == value
 }
 
 func (r *sessionRecord) setLastActivity(now time.Time) {
@@ -640,7 +640,7 @@ func (r *sessionRecord) runtimeView() sessionRuntimeView {
 		ID:                  r.ID,
 		Cookie:              r.Cookie,
 		ResponseMode:        r.ResponseMode,
-		ResponseBase64:      r.ResponseMode == mtuProbeModeBase64,
+		ResponseBase64:      (r.ResponseMode & mtuProbeModeBase64) != 0,
 		DownloadCompression: r.DownloadCompression,
 		DownloadMTU:         r.DownloadMTU,
 		DownloadMTUBytes:    r.DownloadMTUBytes,

@@ -137,7 +137,7 @@ func (s *Server) buildInvalidSessionErrorResponse(questionPacket []byte, request
 		SessionID:  sessionID,
 		PacketType: Enums.PACKET_ERROR_DROP,
 		Payload:    payload[:],
-	}, responseMode == mtuProbeModeBase64)
+	}, (responseMode&mtuProbeModeBase64) != 0)
 	if err != nil {
 		return nil
 	}
@@ -154,7 +154,7 @@ func (s *Server) buildSessionBusyResponse(questionPacket []byte, requestName str
 		SessionID:  0,
 		PacketType: Enums.PACKET_SESSION_BUSY,
 		Payload:    payload[:],
-	}, responseMode == mtuProbeModeBase64)
+	}, (responseMode&mtuProbeModeBase64) != 0)
 	if err != nil {
 		return nil
 	}
@@ -759,7 +759,7 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 		SessionID:  0,
 		PacketType: Enums.PACKET_SESSION_ACCEPT,
 		Payload:    responsePayload[:],
-	}, record.ResponseMode == mtuProbeModeBase64)
+	}, (record.ResponseMode&mtuProbeModeBase64) != 0)
 	if err != nil {
 		return nil
 	}

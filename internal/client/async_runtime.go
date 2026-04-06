@@ -316,6 +316,10 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 		c.runResolverHealthLoop(runtimeCtx)
 	}()
 
+	// X. AckTracker Gc
+	c.asyncWG.Add(1)
+	go c.implicitAckTracker.StartAsyncGc(runtimeCtx, &c.asyncWG)
+
 	// 10. Lifecycle cleanup.
 	c.asyncWG.Add(1)
 	go func() {
@@ -629,7 +633,7 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	// c.log.Debugf("Inbound packet from %v (%d bytes)", addr, len(data))
 
 	// 1. Extract VPN Packet from DNS Response
-	vpnPacket, err := DnsParser.ExtractVPNResponse(data, c.responseMode == mtuProbeBase64Reply)
+	vpnPacket, err := DnsParser.ExtractVPNResponse(data, (c.responseMode&mtuProbeBase64Reply) == mtuProbeBase64Reply)
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrAnswerMissing) {
 			receivedAt := time.Now()
@@ -655,6 +659,8 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	// 			Enums.PacketTypeName(vpnPacket.PacketType), vpnPacket.StreamID, vpnPacket.SequenceNum, len(vpnPacket.Payload), vpnPacket.FragmentID, vpnPacket.TotalFragments)
 	// 	}
 	// }
+
+	// X. Handle implicit uplink ACK in response
 
 	// 2. Notify activity monitor (PingManager)
 	c.NotifyPacket(vpnPacket.PacketType, true)

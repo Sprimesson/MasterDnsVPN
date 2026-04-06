@@ -69,10 +69,14 @@ func isClosedStreamAwarePacketType(packetType uint8) bool {
 }
 
 func sessionResponseModeName(mode uint8) string {
-	if mode == mtuProbeModeBase64 {
-		return "BASE64"
+	encodeMode := "RAW (Bytes)"
+	if (mode & mtuProbeModeBase64) != 0 {
+		encodeMode = "BASE64"
 	}
-	return "RAW (Bytes)"
+	if (mode & implicitUpAckFlag) != 0 {
+		encodeMode += ", Implict Uplink Ack"
+	}
+	return encodeMode
 }
 
 func buildCompressionMask(values []int) uint8 {
@@ -87,7 +91,7 @@ func buildCompressionMask(values []int) uint8 {
 }
 
 func parseMTUProbeBaseEncoding(mode uint8) (bool, bool) {
-	switch mode {
+	switch mode & mtuProbeModeBase64 {
 	case mtuProbeModeRaw:
 		return false, true
 	case mtuProbeModeBase64:

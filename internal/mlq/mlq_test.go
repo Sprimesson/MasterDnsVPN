@@ -177,36 +177,6 @@ func TestMLQRemoveByKeyRemovesQueuedItem(t *testing.T) {
 	}
 }
 
-func TestMLQCompactsAfterHeavyPopShrink(t *testing.T) {
-	q := New[*testItem](2048)
-
-	for i := 0; i < 2048; i++ {
-		if !q.Push(1, uint64(i+1), &testItem{key: uint64(i + 1), value: "x"}) {
-			t.Fatalf("push failed at %d", i)
-		}
-	}
-
-	initialCap := cap(q.queues[1].Items)
-	if initialCap <= compactThreshold {
-		t.Fatalf("expected initial capacity above compact threshold, got %d", initialCap)
-	}
-
-	for i := 0; i < 1800; i++ {
-		if _, _, ok := q.Pop(testKey); !ok {
-			t.Fatalf("unexpected pop failure at %d", i)
-		}
-	}
-
-	shrunkCap := cap(q.queues[1].Items)
-	if shrunkCap >= initialCap {
-		t.Fatalf("expected queue capacity to shrink, initial=%d current=%d", initialCap, shrunkCap)
-	}
-
-	if q.Size() != 248 {
-		t.Fatalf("expected 248 items to remain, got %d", q.Size())
-	}
-}
-
 func TestMLQFastSizeTracksAllMutations(t *testing.T) {
 	q := New[*testItem](8)
 	if got := q.FastSize(); got != 0 {

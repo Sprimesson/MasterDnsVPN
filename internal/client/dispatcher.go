@@ -339,6 +339,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 				if selected != nil {
 					selected.ReleaseTXPacket(item)
 				}
+				item = nil
 			} else {
 				finalPacketType = item.PacketType
 				finalPayload = item.Payload

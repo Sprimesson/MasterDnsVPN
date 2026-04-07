@@ -30,6 +30,7 @@ type Balancer struct {
 	version   atomic.Uint64
 
 	mu       sync.Mutex
+	size     int
 	sources  []*Connection
 	snapshot atomic.Pointer[balancerSnapshot]
 }
@@ -63,21 +64,81 @@ func (b *Balancer) SetConnections(connections []*Connection) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.size = len(connections)
 	b.sources = connections
-	size := len(connections)
+	b.rebuildSnapshot()
+}
+
+// Activate marks a connection as valid and moves it into the active selection pool.
+func (b *Balancer) Activate(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return
+	}
+
+	idx, ok := snap.indexByKey[key]
+	if !ok {
+		return
+	}
+
+	if b.sources[idx].IsValid {
+		return
+	}
+
+	b.sources[idx].IsValid = true
+	b.rebuildSnapshot()
+}
+
+// Deactivate marks a connection as invalid and removes it from the active selection pool.
+func (b *Balancer) Deactivate(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return
+	}
+
+	idx, ok := snap.indexByKey[key]
+	if !ok {
+		return
+	}
+
+	if !b.sources[idx].IsValid {
+		return
+	}
+
+	b.sources[idx].IsValid = false
+	b.rebuildSnapshot()
+}
+
+func (b *Balancer) rebuildSnapshot() {
+	size := len(b.sources)
 	indexByKey := make(map[string]int, size)
 	stats := make([]*connectionStats, size)
 	copied := make([]Connection, size)
 	active := make([]int, 0, size)
 	inactive := make([]int, 0, size)
 
-	for idx, conn := range connections {
+	oldSnap := b.snapshot.Load()
+
+	for idx, conn := range b.sources {
 		if conn == nil {
 			continue
 		}
 		copied[idx] = *conn
 		indexByKey[conn.Key] = idx
-		stats[idx] = &connectionStats{}
+
+		// Reuse stats if they exist, otherwise create new
+		if oldSnap != nil && idx < len(oldSnap.stats) && oldSnap.stats[idx] != nil {
+			stats[idx] = oldSnap.stats[idx]
+		} else {
+			stats[idx] = &connectionStats{}
+		}
+
 		if conn.IsValid {
 			active = append(active, idx)
 		} else {

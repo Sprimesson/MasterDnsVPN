@@ -79,14 +79,6 @@ func (r *ResolverRuntime) LoadConnections(connections []Connection) {
 		r.keyToIndex[conn.Key] = idx
 	}
 
-	if r.balancer != nil {
-		pointers := make([]*Connection, len(connections))
-		for i := range connections {
-			pointers[i] = &connections[i]
-		}
-
-		r.balancer.SetConnections(pointers)
-	}
 }
 
 func (r *ResolverRuntime) RefreshFromConnections(connections []Connection) {

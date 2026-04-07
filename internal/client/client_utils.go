@@ -189,12 +189,16 @@ func (c *Client) Log() *logger.Logger {
 	return c.log
 }
 
-// connectionPtrByKey returns a pointer to a Connection object based on its unique key.
+// connectionPtrByKey remains as a bridge, now fetching from Balancer.
 func (c *Client) connectionPtrByKey(key string) *Connection {
-	if idx, ok := c.connectionsByKey[key]; ok {
-		return &c.connections[idx]
+	if c.balancer == nil {
+		return nil
 	}
-	return nil
+	conn, ok := c.balancer.GetConnectionByKey(key)
+	if !ok {
+		return nil
+	}
+	return &conn
 }
 
 func orphanResetKey(packetType uint8, streamID uint16) uint64 {
@@ -561,11 +565,14 @@ func (c *Client) PrintBanner() {
 }
 
 func (c *Client) Connections() []Connection {
-	return c.connections
+	if c.balancer == nil {
+		return nil
+	}
+	return c.balancer.GetAllConnections()
 }
 
 // BuildConnectionMap iterates through all domains and resolvers in the configuration
-// and builds a comprehensive list of unique Connection objects.
+// and builds a comprehensive list of unique Connection objects, then entrusts them to the Balancer.
 func (c *Client) BuildConnectionMap() error {
 	domains := c.cfg.Domains
 	resolvers := c.cfg.Resolvers
@@ -593,26 +600,28 @@ func (c *Client) BuildConnectionMap() error {
 				ResolverPort:  resolver.Port,
 				ResolverLabel: label,
 				Key:           key,
-				IsValid:       true,
+				IsValid:       false, // Initially all are inactive until MTU/Health checks pass
 			})
 			if ip := net.ParseIP(resolver.IP); ip != nil {
+				c.resolverAddrMu.Lock()
 				c.resolverAddrCache[label] = &net.UDPAddr{IP: ip, Port: resolver.Port}
+				c.resolverAddrMu.Unlock()
 			}
 		}
 	}
 
-	c.connections = connections
-	c.connectionsByKey = indexByKey
-	if c.runtime != nil {
-		c.runtime.LoadConnections(c.connections)
-		return nil
+	pointers := make([]*Connection, len(connections))
+	for i := range connections {
+		pointers[i] = &connections[i]
 	}
 
-	pointers := make([]*Connection, len(c.connections))
-	for i := range c.connections {
-		pointers[i] = &c.connections[i]
+	if c.balancer != nil {
+		c.balancer.SetConnections(pointers)
 	}
-	c.balancer.SetConnections(pointers)
+
+	if c.runtime != nil {
+		c.runtime.LoadConnections(connections)
+	}
 
 	return nil
 }

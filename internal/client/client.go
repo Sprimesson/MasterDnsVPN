@@ -39,8 +39,6 @@ type Client struct {
 	balancer *Balancer
 	runtime  *ResolverRuntime
 
-	connections         []Connection
-	connectionsByKey    map[string]int
 	successMTUChecks    bool
 	udpBufferPool       sync.Pool
 	resolverConnsMu     sync.Mutex
@@ -240,7 +238,6 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		mtuCryptoOverhead:   mtuCryptoOverhead(cfg.DataEncryptionMethod),
 		maxPackedBlocks:     1,
 		responseMode:        responseMode,
-		connectionsByKey:    make(map[string]int, len(cfg.Domains)*len(cfg.Resolvers)),
 		udpBufferPool: sync.Pool{
 			New: func() any {
 				return make([]byte, RuntimeUDPReadBufferSize)

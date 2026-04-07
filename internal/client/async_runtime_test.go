@@ -379,7 +379,6 @@ func TestResolverHealthLoopCollectsResolverTimeoutsWhenAutoDisableEnabled(t *tes
 		true,
 		180*time.Second,
 		3*time.Second,
-		1,
 	)
 
 	c.balancer.pendingStoreForTest(key, balancerResolverSample{
@@ -431,7 +430,6 @@ func TestHandleInboundPacketTreatsServerFailureWithoutTXTAsResolverFailure(t *te
 	c := buildTestClientWithResolvers(config.ClientConfig{
 		AutoDisableTimeoutServers:       true,
 		AutoDisableTimeoutWindowSeconds: 10,
-		AutoDisableMinObservations:      1,
 	}, "a", "b", "c", "d")
 	addr := &net.UDPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53}
 

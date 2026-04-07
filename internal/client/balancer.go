@@ -97,10 +97,9 @@ type Balancer struct {
 	streamFailoverThreshold int
 	streamFailoverCooldown  time.Duration
 
-	autoDisableEnabled         bool
-	autoDisableTimeoutWindow   time.Duration
-	autoDisableCheckInterval   time.Duration
-	autoDisableMinObservations int
+	autoDisableEnabled       bool
+	autoDisableTimeoutWindow time.Duration
+	autoDisableCheckInterval time.Duration
 }
 
 type connectionStats struct {
@@ -150,18 +149,14 @@ func (b *Balancer) SetStreamFailoverConfig(threshold int, cooldown time.Duration
 	b.mu.Unlock()
 }
 
-func (b *Balancer) SetAutoDisableConfig(enabled bool, window time.Duration, interval time.Duration, minObservations int) {
+func (b *Balancer) SetAutoDisableConfig(enabled bool, window time.Duration, interval time.Duration) {
 	if b == nil {
 		return
-	}
-	if minObservations < 1 {
-		minObservations = 1
 	}
 	b.mu.Lock()
 	b.autoDisableEnabled = enabled
 	b.autoDisableTimeoutWindow = window
 	b.autoDisableCheckInterval = interval
-	b.autoDisableMinObservations = minObservations
 	b.mu.Unlock()
 }
 
@@ -338,7 +333,7 @@ func (b *Balancer) ReportSuccess(serverKey string, rtt time.Duration) {
 	stats.applyHalfLife()
 }
 
-func (b *Balancer) ReportTimeout(serverKey string, now time.Time, window time.Duration, minObservations int, minActive int) bool {
+func (b *Balancer) ReportTimeout(serverKey string, now time.Time, window time.Duration, minActive int) bool {
 	stats := b.statsForKey(serverKey)
 	if stats == nil {
 		return false
@@ -348,19 +343,16 @@ func (b *Balancer) ReportTimeout(serverKey string, now time.Time, window time.Du
 
 	totalTimedOut, totalSent := stats.recordWindowTimeout(now, window)
 
-	if minObservations < 1 {
-		minObservations = 1
-	}
-
-	if int(totalSent) < minObservations || totalTimedOut != totalSent {
-		return false
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	conn, ok := b.connectionByKeyLocked(serverKey)
 	if !ok || !conn.IsValid {
+		return false
+	}
+
+	minObservations := autoDisableMinObservationsForActiveCount(len(b.activeIDs))
+	if int(totalSent) < minObservations || totalTimedOut != totalSent {
 		return false
 	}
 
@@ -390,6 +382,25 @@ func (b *Balancer) ReportTimeout(serverKey string, now time.Time, window time.Du
 	}
 
 	return true
+}
+
+func autoDisableMinObservationsForActiveCount(active int) int {
+	switch {
+	case active <= 3:
+		return 1000000
+	case active <= 5:
+		return 40
+	case active <= 10:
+		return 30
+	case active <= 20:
+		return 20
+	case active <= 50:
+		return 12
+	case active <= 100:
+		return 8
+	default:
+		return 6
+	}
 }
 
 func (b *Balancer) RetractTimeout(serverKey string, now time.Time, window time.Duration) bool {
@@ -519,7 +530,6 @@ func (b *Balancer) TrackResolverFailure(
 	b.mu.RLock()
 	autoDisable := b.autoDisableEnabled
 	window := b.autoDisableTimeoutWindow
-	minObservations := b.autoDisableMinObservations
 	b.mu.RUnlock()
 
 	key := balancerResolverSampleKey{
@@ -540,7 +550,7 @@ func (b *Balancer) TrackResolverFailure(
 	if !ok || sample.serverKey == "" || sample.timedOut || !autoDisable {
 		return
 	}
-	b.ReportTimeout(sample.serverKey, failedAt, window, minObservations, 1)
+	b.ReportTimeout(sample.serverKey, failedAt, window, 1)
 }
 
 func (b *Balancer) CollectExpiredResolverTimeouts(
@@ -555,7 +565,6 @@ func (b *Balancer) CollectExpiredResolverTimeouts(
 	autoDisable := b.autoDisableEnabled
 	checkInterval := b.autoDisableCheckInterval
 	window := b.autoDisableTimeoutWindow
-	minObservations := b.autoDisableMinObservations
 	b.mu.RUnlock()
 
 	if !autoDisable {
@@ -593,7 +602,7 @@ func (b *Balancer) CollectExpiredResolverTimeouts(
 	b.pendingOverflow.Store(false)
 
 	for _, observation := range timeoutObservations {
-		b.ReportTimeout(observation.serverKey, observation.at, window, minObservations, 1)
+		b.ReportTimeout(observation.serverKey, observation.at, window, 1)
 	}
 }
 

@@ -6,6 +6,8 @@ SERVICE_NAME=masterdnsvpn4
 SERVICE_DIR=/opt/masterdnsvpn4
 SERVICE_BIN=mdvserver4
 
-DEPLOY_VER=Spr41i6_4
+DEPLOY_VER=farvardin22
 
 DEST_DIR=/mnt/c/Projects/denerastin/spr2x/MasterDnsVPN_Client
+
+CLI_CONFIG_DEPLOYED=1_server4_${DEPLOY_VER}

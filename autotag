@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 source ./ver
 
-NAME="$(date +%y%m%d)-${DEPLOY_VER}"
+NAME="$(date +%y%m%d)-Spr-${DEPLOY_VER}"
 COMMIT="$(git rev-parse HEAD)"
 
 git tag -f "$NAME" "$COMMIT"

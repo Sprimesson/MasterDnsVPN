@@ -72,8 +72,8 @@ func newClientFlagSet(output io.Writer) (*flag.FlagSet, *clientCLIOptions, *conf
 		printClientUsage(fs)
 	}
 
-	fs.StringVar(&opts.configPath, "config", "client_config.toml", "Path to client configuration file")
-	fs.StringVar(&opts.configPath, "c", "client_config.toml", "Alias for -config")
+	fs.StringVar(&opts.configPath, "config", "", "Path to client configuration file")
+	fs.StringVar(&opts.configPath, "c", "", "Alias for -config")
 	fs.StringVar(&opts.jsonPath, "json", "", "Path to client JSON configuration file")
 	fs.StringVar(&opts.jsonPath, "j", "", "Alias for -json")
 	fs.StringVar(&opts.jsonBase64, "json_base64", "", "Load client JSON configuration from base64")
@@ -157,6 +157,10 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 		}
 	default:
 		return nil, config.ClientConfigOverrides{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
+	}
+
+	if opts.configPath == "" && opts.noStartPrompt {
+		opts.configPath = "client_config.toml"
 	}
 
 	return opts, overrides, nil

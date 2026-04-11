@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
-SERVER_NAME=sewr3
-SERVICE_NAME=masterdnsvpn3
-SERVICE_DIR=/opt/masterdnsvpn3
-SERVICE_BIN=mdvserver3
+#SERVER_NAME=sewr3
+SERVER_NAME=sewr4
+SERVICE_NAME=masterdnsvpn4
+SERVICE_DIR=/opt/masterdnsvpn4
+SERVICE_BIN=mdvserver4
 
-DEPLOY_VER=Spr32i6D
+DEPLOY_VER=Spr41i6_4
 
 DEST_DIR=/mnt/c/Projects/denerastin/spr2x/MasterDnsVPN_Client

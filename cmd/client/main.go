@@ -21,6 +21,7 @@ import (
 
 	"masterdnsvpn-go/internal/client"
 	"masterdnsvpn-go/internal/config"
+	"masterdnsvpn-go/internal/interactive"
 	"masterdnsvpn-go/internal/runtimepath"
 	"masterdnsvpn-go/internal/version"
 )
@@ -57,6 +58,7 @@ type clientCLIOptions struct {
 	resolversPath string
 	showVersion   bool
 	showHelp      bool
+	noStartPrompt bool
 	domainsShort  string
 	keyShort      string
 }
@@ -85,6 +87,8 @@ func newClientFlagSet(output io.Writer) (*flag.FlagSet, *clientCLIOptions, *conf
 
 	fs.BoolVar(&opts.showVersion, "version", false, "Print version and exit")
 	fs.BoolVar(&opts.showVersion, "v", false, "Alias for -version")
+
+	fs.BoolVar(&opts.noStartPrompt, "noprompt", false, "No prompt at startup (automatically set if resolvers or config is set by cmdline)")
 
 	fs.BoolVar(&opts.showHelp, "help", false, "Show help and exit")
 	fs.BoolVar(&opts.showHelp, "h", false, "Alias for -help")
@@ -118,7 +122,11 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 	if opts.jsonPath != "" && opts.jsonBase64 != "" {
 		return nil, config.ClientConfigOverrides{}, fmt.Errorf("only one of -json and -json_base64 can be used")
 	}
+	if opts.configPath != "" {
+		opts.noStartPrompt = true
+	}
 	if opts.resolversPath != "" {
+		opts.noStartPrompt = true
 		resolvedResolversPath := runtimepath.Resolve(opts.resolversPath)
 		overrides.ResolversFilePath = &resolvedResolversPath
 	}
@@ -134,6 +142,7 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 	case 1:
 		if opts.jsonPath == "" && opts.jsonBase64 == "" && (opts.configPath == "" || opts.configPath == "client_config.toml") {
 			opts.configPath = fs.Arg(0)
+			opts.noStartPrompt = true
 		} else {
 			return nil, config.ClientConfigOverrides{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 		}
@@ -141,6 +150,7 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 		if opts.jsonPath == "" && opts.jsonBase64 == "" && (opts.configPath == "" || opts.configPath == "client_config.toml") && opts.resolversPath == "" {
 			opts.configPath = fs.Arg(0)
 			resolvedResolversPath := runtimepath.Resolve(fs.Arg(1))
+			opts.noStartPrompt = true
 			overrides.ResolversFilePath = &resolvedResolversPath
 		} else {
 			return nil, config.ClientConfigOverrides{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
@@ -174,6 +184,25 @@ func main() {
 	if opts.showVersion {
 		fmt.Printf("MasterDnsVPN Client Version: %s\n", version.GetVersion())
 		return
+	}
+
+	if !opts.noStartPrompt {
+		sel, err := interactive.RunStartupPicker()
+		if err != nil {
+			panic(err)
+		}
+		if sel.ExitRequested {
+			return
+		}
+
+		// continue normal console execution here
+		fmt.Println("Config:", sel.ConfigPath)
+		fmt.Println("Resolver:", sel.ResolverPath)
+
+		opts.configPath = sel.ConfigPath
+		opts.resolversPath = sel.ResolverPath
+		resolvedResolversPath := runtimepath.Resolve(sel.ResolverPath)
+		overrides.ResolversFilePath = &resolvedResolversPath
 	}
 
 	resolvedConfigPath := runtimepath.Resolve(opts.configPath)

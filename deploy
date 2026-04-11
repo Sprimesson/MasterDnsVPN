@@ -16,7 +16,7 @@ ssh -T $SERVER_NAME << EOF || exit 1
 EOF
 
 echo Copying server and config to $SERVICE_DIR...
-rsync -avzL --progress ./$SERVICE_BIN ./server_config.toml sewr3:$SERVICE_DIR/  || exit 1
+rsync -avzL --progress ./$SERVICE_BIN ./server_config.toml $SERVER_NAME:$SERVICE_DIR/  || exit 1
 
 ssh -T $SERVER_NAME << EOF
   echo MDV Server: Starting $SERVICE_NAME

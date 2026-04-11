@@ -223,30 +223,80 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 
 func loadClientConfigFile(filename string) (ClientConfig, error) {
 	cfg := defaultClientConfig()
-	path, err := filepath.Abs(filename)
+	path, format, err := resolveConfigPathWithJSONFallback(filename)
 	if err != nil {
 		return cfg, err
-	}
-
-	if _, err := os.Stat(path); err != nil {
-		return cfg, fmt.Errorf("config file not found: %s", path)
-	}
-
-	meta, err := toml.DecodeFile(path, &cfg)
-	if err != nil {
-		return cfg, fmt.Errorf("parse TOML failed for %s: %w", path, err)
 	}
 
 	cfg.ConfigPath = path
 	cfg.ConfigDir = filepath.Dir(path)
 	cfg.ResolversFilePath = ""
-	cfg.explicitRX_TX_Workers = meta.IsDefined("RX_TX_WORKERS")
-	cfg.explicitTunnelProcessWorkers = meta.IsDefined("TUNNEL_PROCESS_WORKERS")
+
+	switch format {
+	case configSourceJSON:
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return cfg, err
+		}
+		defined, err := decodeConfigJSONInto(&cfg, raw)
+		if err != nil {
+			return cfg, fmt.Errorf("parse JSON failed for %s: %w", path, err)
+		}
+		cfg.explicitRX_TX_Workers = defined["RX_TX_Workers"]
+		cfg.explicitTunnelProcessWorkers = defined["TunnelProcessWorkers"]
+	default:
+		meta, err := toml.DecodeFile(path, &cfg)
+		if err != nil {
+			return cfg, fmt.Errorf("parse TOML failed for %s: %w", path, err)
+		}
+		cfg.explicitRX_TX_Workers = meta.IsDefined("RX_TX_WORKERS")
+		cfg.explicitTunnelProcessWorkers = meta.IsDefined("TUNNEL_PROCESS_WORKERS")
+	}
+
 	return cfg, nil
+}
+
+func LoadClientConfigFromJSONBase64(encoded string) (ClientConfig, error) {
+	cfg := defaultClientConfig()
+	raw, err := decodeBase64ConfigJSON(encoded)
+	if err != nil {
+		return cfg, fmt.Errorf("decode client JSON base64 failed: %w", err)
+	}
+	defined, err := decodeConfigJSONInto(&cfg, raw)
+	if err != nil {
+		return cfg, fmt.Errorf("parse client JSON base64 failed: %w", err)
+	}
+	cfg.ConfigDir = currentWorkingConfigDir()
+	cfg.ConfigPath = "<json_base64>"
+	cfg.ResolversFilePath = ""
+	cfg.explicitRX_TX_Workers = defined["RX_TX_Workers"]
+	cfg.explicitTunnelProcessWorkers = defined["TunnelProcessWorkers"]
+	return finalizeClientConfig(cfg)
 }
 
 func LoadClientConfigWithOverrides(filename string, overrides ClientConfigOverrides) (ClientConfig, error) {
 	cfg, err := loadClientConfigFile(filename)
+	if err != nil {
+		return cfg, err
+	}
+
+	if overrides.ResolversFilePath != nil {
+		cfg.ResolversFilePath = strings.TrimSpace(*overrides.ResolversFilePath)
+	}
+	if len(overrides.Values) > 0 {
+		if err := applyClientConfigOverrideValues(&cfg, overrides.Values); err != nil {
+			return cfg, err
+		}
+		if _, ok := overrides.Values["TunnelProcessWorkers"]; ok {
+			cfg.explicitTunnelProcessWorkers = true
+		}
+	}
+
+	return finalizeClientConfig(cfg)
+}
+
+func LoadClientConfigFromJSONBase64WithOverrides(encoded string, overrides ClientConfigOverrides) (ClientConfig, error) {
+	cfg, err := LoadClientConfigFromJSONBase64(encoded)
 	if err != nil {
 		return cfg, err
 	}

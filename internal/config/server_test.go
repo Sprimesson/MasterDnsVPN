@@ -8,6 +8,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"flag"
 	"os"
 	"path/filepath"
@@ -214,5 +215,62 @@ MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS = 0.001
 	}
 	if cfg.ClientMinARQInitialRTOSeconds != 0.05 {
 		t.Fatalf("unexpected arq initial rto clamp: got=%f want=%f", cfg.ClientMinARQInitialRTOSeconds, 0.05)
+	}
+}
+
+func TestLoadServerConfigFallsBackToJSONWhenTOMLIsMissing(t *testing.T) {
+	dir := t.TempDir()
+
+	configPath := filepath.Join(dir, "server_config.toml")
+	jsonPath := filepath.Join(dir, "server_config.json")
+
+	if err := os.WriteFile(jsonPath, []byte(`{
+  "PROTOCOL_TYPE": "SOCKS5",
+  "UDP_PORT": 5300,
+  "DOMAIN": ["json.example.com"],
+  "DATA_ENCRYPTION_METHOD": 1,
+  "SUPPORTED_UPLOAD_COMPRESSION_TYPES": [0, 3],
+  "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES": [0, 3]
+}`), 0o644); err != nil {
+		t.Fatalf("WriteFile JSON config failed: %v", err)
+	}
+
+	cfg, err := LoadServerConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadServerConfig returned error: %v", err)
+	}
+
+	if cfg.ConfigPath != jsonPath {
+		t.Fatalf("expected JSON fallback path: got=%q want=%q", cfg.ConfigPath, jsonPath)
+	}
+	if cfg.UDPPort != 5300 {
+		t.Fatalf("unexpected JSON UDP port: got=%d want=%d", cfg.UDPPort, 5300)
+	}
+}
+
+func TestLoadServerConfigFromJSONBase64AppliesDefaults(t *testing.T) {
+	rawJSON := `{
+  "PROTOCOL_TYPE": "SOCKS5",
+  "UDP_PORT": 5301,
+  "DOMAIN": ["base64.example.com"],
+  "DATA_ENCRYPTION_METHOD": 1,
+  "SUPPORTED_UPLOAD_COMPRESSION_TYPES": [0, 3],
+  "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES": [0, 3]
+}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(rawJSON))
+
+	cfg, err := LoadServerConfigFromJSONBase64(encoded)
+	if err != nil {
+		t.Fatalf("LoadServerConfigFromJSONBase64 returned error: %v", err)
+	}
+
+	if cfg.ConfigPath != "<json_base64>" {
+		t.Fatalf("unexpected config path: got=%q want=%q", cfg.ConfigPath, "<json_base64>")
+	}
+	if cfg.UDPPort != 5301 {
+		t.Fatalf("unexpected JSON base64 UDP port: got=%d want=%d", cfg.UDPPort, 5301)
+	}
+	if cfg.MaxPacketsPerBatch != defaultServerConfig().MaxPacketsPerBatch {
+		t.Fatalf("expected default max packets per batch to apply: got=%d want=%d", cfg.MaxPacketsPerBatch, defaultServerConfig().MaxPacketsPerBatch)
 	}
 }

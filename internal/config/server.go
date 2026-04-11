@@ -199,17 +199,24 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 
 func loadServerConfigFile(filename string) (ServerConfig, error) {
 	cfg := defaultServerConfig()
-	path, err := filepath.Abs(filename)
+	path, format, err := resolveConfigPathWithJSONFallback(filename)
 	if err != nil {
 		return cfg, err
 	}
 
-	if _, err := os.Stat(path); err != nil {
-		return cfg, fmt.Errorf("config file not found: %s", path)
-	}
-
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return cfg, fmt.Errorf("parse TOML failed for %s: %w", path, err)
+	switch format {
+	case configSourceJSON:
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return cfg, err
+		}
+		if _, err := decodeConfigJSONInto(&cfg, raw); err != nil {
+			return cfg, fmt.Errorf("parse JSON failed for %s: %w", path, err)
+		}
+	default:
+		if _, err := toml.DecodeFile(path, &cfg); err != nil {
+			return cfg, fmt.Errorf("parse TOML failed for %s: %w", path, err)
+		}
 	}
 
 	cfg.ConfigPath = path
@@ -217,8 +224,35 @@ func loadServerConfigFile(filename string) (ServerConfig, error) {
 	return cfg, nil
 }
 
+func LoadServerConfigFromJSONBase64(encoded string) (ServerConfig, error) {
+	cfg := defaultServerConfig()
+	raw, err := decodeBase64ConfigJSON(encoded)
+	if err != nil {
+		return cfg, fmt.Errorf("decode server JSON base64 failed: %w", err)
+	}
+	if _, err := decodeConfigJSONInto(&cfg, raw); err != nil {
+		return cfg, fmt.Errorf("parse server JSON base64 failed: %w", err)
+	}
+	cfg.ConfigDir = currentWorkingConfigDir()
+	cfg.ConfigPath = "<json_base64>"
+	return finalizeServerConfig(cfg)
+}
+
 func LoadServerConfigWithOverrides(filename string, overrides ServerConfigOverrides) (ServerConfig, error) {
 	cfg, err := loadServerConfigFile(filename)
+	if err != nil {
+		return cfg, err
+	}
+	if len(overrides.Values) > 0 {
+		if err := applyServerConfigOverrideValues(&cfg, overrides.Values); err != nil {
+			return cfg, err
+		}
+	}
+	return finalizeServerConfig(cfg)
+}
+
+func LoadServerConfigFromJSONBase64WithOverrides(encoded string, overrides ServerConfigOverrides) (ServerConfig, error) {
+	cfg, err := LoadServerConfigFromJSONBase64(encoded)
 	if err != nil {
 		return cfg, err
 	}

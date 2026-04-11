@@ -51,3 +51,19 @@ func TestParseClientCLIArgsAcceptsPositionalConfigAndResolvers(t *testing.T) {
 		t.Fatal("expected positional resolvers path override")
 	}
 }
+
+func TestParseClientCLIArgsAcceptsJSONBase64Mode(t *testing.T) {
+	opts, overrides, err := parseClientCLIArgs([]string{"-json_base64", "Zm9v"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseClientCLIArgs returned error: %v", err)
+	}
+	if opts.jsonBase64 != "Zm9v" {
+		t.Fatalf("unexpected json base64 payload: got=%q want=%q", opts.jsonBase64, "Zm9v")
+	}
+	if opts.jsonPath != "" {
+		t.Fatalf("did not expect json file path in json base64 mode: %q", opts.jsonPath)
+	}
+	if overrides.ResolversFilePath != nil {
+		t.Fatal("did not expect resolver override in json base64 mode")
+	}
+}

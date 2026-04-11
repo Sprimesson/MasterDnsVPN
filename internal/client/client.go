@@ -183,7 +183,10 @@ func Bootstrap(configPath string, logPath string, overrides config.ClientConfigO
 	if err != nil {
 		return nil, err
 	}
+	return BootstrapLoadedConfig(cfg, logPath)
+}
 
+func BootstrapLoadedConfig(cfg config.ClientConfig, logPath string) (*Client, error) {
 	var log *logger.Logger
 	if logPath != "" {
 		log = logger.NewWithFile("MasterDnsVPN Client", cfg.LogLevel, logPath)

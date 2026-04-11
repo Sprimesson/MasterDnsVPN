@@ -8,6 +8,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"flag"
 	"os"
 	"path/filepath"
@@ -435,5 +436,84 @@ func TestClientConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	}
 	if _, exists := overrides.Values["MaxUploadMTU"]; exists {
 		t.Fatalf("did not expect unset flag to appear in overrides: %#v", overrides.Values["MaxUploadMTU"])
+	}
+}
+
+func TestLoadClientConfigFallsBackToJSONWhenTOMLIsMissing(t *testing.T) {
+	dir := t.TempDir()
+
+	configPath := filepath.Join(dir, "client_config.toml")
+	jsonPath := filepath.Join(dir, "client_config.json")
+	resolversPath := filepath.Join(dir, "client_resolvers.txt")
+
+	if err := os.WriteFile(jsonPath, []byte(`{
+  "PROTOCOL_TYPE": "SOCKS5",
+  "DOMAINS": ["json.example.com"],
+  "DATA_ENCRYPTION_METHOD": 1,
+  "ENCRYPTION_KEY": "json-secret",
+  "MAX_UPLOAD_MTU": 140
+}`), 0o644); err != nil {
+		t.Fatalf("WriteFile JSON config failed: %v", err)
+	}
+	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile resolvers failed: %v", err)
+	}
+
+	cfg, err := LoadClientConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadClientConfig returned error: %v", err)
+	}
+
+	if cfg.ConfigPath != jsonPath {
+		t.Fatalf("expected JSON fallback path: got=%q want=%q", cfg.ConfigPath, jsonPath)
+	}
+	if cfg.MaxUploadMTU != 140 {
+		t.Fatalf("unexpected JSON MTU value: got=%d want=%d", cfg.MaxUploadMTU, 140)
+	}
+	if len(cfg.Domains) != 1 || cfg.Domains[0] != "json.example.com" {
+		t.Fatalf("unexpected JSON domains: %+v", cfg.Domains)
+	}
+}
+
+func TestLoadClientConfigFromJSONBase64AppliesDefaultsAndLoadsResolvers(t *testing.T) {
+	dir := t.TempDir()
+	resolversPath := filepath.Join(dir, "client_resolvers.txt")
+
+	if err := os.WriteFile(resolversPath, []byte("1.1.1.1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile resolvers failed: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(previousWD)
+	}()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	rawJSON := `{
+  "PROTOCOL_TYPE": "SOCKS5",
+  "DOMAINS": ["base64.example.com"],
+  "DATA_ENCRYPTION_METHOD": 1,
+  "ENCRYPTION_KEY": "base64-secret"
+}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(rawJSON))
+
+	cfg, err := LoadClientConfigFromJSONBase64(encoded)
+	if err != nil {
+		t.Fatalf("LoadClientConfigFromJSONBase64 returned error: %v", err)
+	}
+
+	if cfg.ConfigPath != "<json_base64>" {
+		t.Fatalf("unexpected config path: got=%q want=%q", cfg.ConfigPath, "<json_base64>")
+	}
+	if cfg.MaxUploadMTU != defaultClientConfig().MaxUploadMTU {
+		t.Fatalf("expected default upload mtu to apply: got=%d want=%d", cfg.MaxUploadMTU, defaultClientConfig().MaxUploadMTU)
+	}
+	if cfg.ResolverMap["1.1.1.1"] != 53 {
+		t.Fatalf("expected resolvers file from cwd to be loaded, got=%d", cfg.ResolverMap["1.1.1.1"])
 	}
 }

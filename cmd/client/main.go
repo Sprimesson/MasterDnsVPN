@@ -51,6 +51,8 @@ func printClientUsage(fs *flag.FlagSet) {
 
 type clientCLIOptions struct {
 	configPath    string
+	jsonPath      string
+	jsonBase64    string
 	logPath       string
 	resolversPath string
 	showVersion   bool
@@ -70,6 +72,10 @@ func newClientFlagSet(output io.Writer) (*flag.FlagSet, *clientCLIOptions, *conf
 
 	fs.StringVar(&opts.configPath, "config", "client_config.toml", "Path to client configuration file")
 	fs.StringVar(&opts.configPath, "c", "client_config.toml", "Alias for -config")
+	fs.StringVar(&opts.jsonPath, "json", "", "Path to client JSON configuration file")
+	fs.StringVar(&opts.jsonPath, "j", "", "Alias for -json")
+	fs.StringVar(&opts.jsonBase64, "json_base64", "", "Load client JSON configuration from base64")
+	fs.StringVar(&opts.jsonBase64, "json-base64", "", "Alias for -json_base64")
 
 	fs.StringVar(&opts.logPath, "log", "", "Path to log file (optional)")
 	fs.StringVar(&opts.logPath, "l", "", "Alias for -log")
@@ -109,6 +115,9 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 	}
 
 	overrides := configFlags.Overrides()
+	if opts.jsonPath != "" && opts.jsonBase64 != "" {
+		return nil, config.ClientConfigOverrides{}, fmt.Errorf("only one of -json and -json_base64 can be used")
+	}
 	if opts.resolversPath != "" {
 		resolvedResolversPath := runtimepath.Resolve(opts.resolversPath)
 		overrides.ResolversFilePath = &resolvedResolversPath
@@ -123,13 +132,13 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 	switch fs.NArg() {
 	case 0:
 	case 1:
-		if opts.configPath == "" || opts.configPath == "client_config.toml" {
+		if opts.jsonPath == "" && opts.jsonBase64 == "" && (opts.configPath == "" || opts.configPath == "client_config.toml") {
 			opts.configPath = fs.Arg(0)
 		} else {
 			return nil, config.ClientConfigOverrides{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 		}
 	case 2:
-		if (opts.configPath == "" || opts.configPath == "client_config.toml") && opts.resolversPath == "" {
+		if opts.jsonPath == "" && opts.jsonBase64 == "" && (opts.configPath == "" || opts.configPath == "client_config.toml") && opts.resolversPath == "" {
 			opts.configPath = fs.Arg(0)
 			resolvedResolversPath := runtimepath.Resolve(fs.Arg(1))
 			overrides.ResolversFilePath = &resolvedResolversPath
@@ -169,7 +178,23 @@ func main() {
 
 	resolvedConfigPath := runtimepath.Resolve(opts.configPath)
 
-	app, err := client.Bootstrap(resolvedConfigPath, opts.logPath, overrides)
+	var app *client.Client
+	switch {
+	case opts.jsonBase64 != "":
+		cfg, err := config.LoadClientConfigFromJSONBase64WithOverrides(opts.jsonBase64, overrides)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Client startup failed: %v\n", err)
+			waitForExitInput()
+			os.Exit(1)
+		}
+		app, err = client.BootstrapLoadedConfig(cfg, opts.logPath)
+		resolvedConfigPath = cfg.ConfigPath
+	case opts.jsonPath != "":
+		app, err = client.Bootstrap(runtimepath.Resolve(opts.jsonPath), opts.logPath, overrides)
+		resolvedConfigPath = runtimepath.Resolve(opts.jsonPath)
+	default:
+		app, err = client.Bootstrap(resolvedConfigPath, opts.logPath, overrides)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Client startup failed: %v\n", err)
 		waitForExitInput()

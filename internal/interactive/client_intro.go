@@ -1,14 +1,14 @@
 package interactive
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
-
-	"github.com/manifoldco/promptui"
 )
 
 type Selection struct {
@@ -27,6 +27,7 @@ const (
 	blue    = "\033[34m"
 	cyan    = "\033[36m"
 	magenta = "\033[35m"
+	dim     = "\033[2m"
 )
 
 func printBanner() {
@@ -37,8 +38,43 @@ func printBanner() {
 ╚═════════════════════════════════════════╝` + reset)
 	fmt.Println(magenta + "──────────────────────────────────────────" + reset)
 	fmt.Println(yellow + "Let's choose the config and resolvers!" + reset)
-	fmt.Println(yellow + "↑↓ Navigate • Enter Select • Ctrl+C Exit" + reset)
+	fmt.Println(dim + "Type a number and press Enter  •  Ctrl+C to exit" + reset)
 	fmt.Println(magenta + "──────────────────────────────────────────" + reset)
+}
+
+// pickOne prints a numbered menu and returns the zero-based index of the
+// chosen item. Returns an "interrupt" error when stdin is closed or empty.
+func pickOne(label string, items []string) (int, error) {
+	fmt.Println()
+	fmt.Printf("  %s%s%s\n", bold+cyan, label, reset)
+	fmt.Println("  " + magenta + strings.Repeat("─", 42) + reset)
+	for i, item := range items {
+		fmt.Printf("  %s%s%2d%s  %s%s%s\n",
+			bold, yellow, i+1, reset,
+			green, item, reset)
+	}
+	fmt.Println("  " + magenta + strings.Repeat("─", 42) + reset)
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("  "+bold+cyan+"❯ "+reset+bold+"Enter number (1–%d): "+reset, len(items))
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println()
+			return 0, errors.New("interrupt")
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		n, convErr := strconv.Atoi(line)
+		if convErr != nil || n < 1 || n > len(items) {
+			fmt.Printf("  "+red+"✗ "+reset+"Please enter a number between 1 and %d.\n", len(items))
+			continue
+		}
+		fmt.Printf("  "+green+"✔ "+reset+"Selected: %s%s%s\n", bold, items[n-1], reset)
+		return n - 1, nil
+	}
 }
 
 func RunStartupPicker() (Selection, error) {
@@ -72,31 +108,20 @@ func RunStartupPicker() (Selection, error) {
 
 	printBanner()
 
-	configIdx, _, err := (&promptui.Select{
-		Label: "Which 'config' do you want to use?",
-		Items: displayNames(configs),
-		Size:  12,
-	}).Run()
+	configIdx, err := pickOne("Which 'config' do you want to use?", displayNames(configs))
 	if err != nil {
-		if isUserAbort(err) {
-			return Selection{ExitRequested: true}, nil
-		}
-		return Selection{}, err
+		return Selection{ExitRequested: true}, nil
 	}
 
-	resolverIdx, _, err := (&promptui.Select{
-		Label: "Which list of resolvers do you want to use? (These txt files have 'resolver' in their names)",
-		Items: displayNames(resolvers),
-		Size:  12,
-	}).Run()
+	resolverIdx, err := pickOne(
+		"Which list of resolvers do you want to use? (txt files with 'resolver' in name)",
+		displayNames(resolvers),
+	)
 	if err != nil {
-		if isUserAbort(err) {
-			return Selection{ExitRequested: true}, nil
-		}
-		return Selection{}, err
+		return Selection{ExitRequested: true}, nil
 	}
 
-	println()
+	fmt.Println()
 
 	return Selection{
 		ConfigPath:   configs[configIdx],
@@ -141,9 +166,4 @@ func displayNames(paths []string) []string {
 		out[i] = filepath.Base(p)
 	}
 	return out
-}
-
-func isUserAbort(err error) bool {
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "interrupt") || strings.Contains(s, "cancel")
 }

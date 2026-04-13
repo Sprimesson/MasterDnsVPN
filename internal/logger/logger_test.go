@@ -89,7 +89,7 @@ func TestShouldUseColorHonorsNoColor(t *testing.T) {
 	_ = os.Setenv("FORCE_COLOR", "1")
 	_ = os.Setenv("NO_COLOR", "1")
 
-	if shouldUseColor() {
+	if ShouldUseColor() {
 		t.Fatal("NO_COLOR should disable colors even when FORCE_COLOR is set")
 	}
 }

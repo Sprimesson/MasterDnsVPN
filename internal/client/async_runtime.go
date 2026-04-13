@@ -696,6 +696,7 @@ func (c *Client) buildPlannedOutboundFrames(
 	}
 
 	frames = frames[:0]
+	qType := QueryTypeFromQueryTypeStr(c.tunnelQType)
 
 	for _, resolverConn := range conns {
 		domain := resolverConn.Domain
@@ -723,7 +724,7 @@ func (c *Client) buildPlannedOutboundFrames(
 		var dnsPacket []byte
 		switch {
 		case firstDNSPacket == nil:
-			dnsPacket, err = DnsParser.BuildTunnelQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+			dnsPacket, err = DnsParser.BuildTunnelQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, qType, EDnsSafeUDPSize)
 			if err != nil {
 				continue
 			}
@@ -738,7 +739,7 @@ func (c *Client) buildPlannedOutboundFrames(
 			var cached bool
 			dnsPacket, cached = packetByDomain[domain]
 			if !cached {
-				dnsPacket, err = DnsParser.BuildTunnelQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+				dnsPacket, err = DnsParser.BuildTunnelQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, qType, EDnsSafeUDPSize)
 				if err != nil {
 					continue
 				}

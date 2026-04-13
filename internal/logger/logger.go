@@ -92,7 +92,7 @@ func NewWithFile(name, rawLevel, filePath string) *Logger {
 		level:          parseLevel(rawLevel),
 		consoleWriter:  consoleWriter,
 		fileWriter:     fileWriter,
-		color:          shouldUseColor(),
+		color:          ShouldUseColor(),
 		appNameText:    appName,
 		appNameColored: "\x1b[36m" + appName + "\x1b[0m",
 		noTime:         false,
@@ -219,7 +219,7 @@ func stripColorTags(text string) string {
 	return b.String()
 }
 
-func shouldUseColor() bool {
+func ShouldUseColor() bool {
 	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
 		return false
 	}

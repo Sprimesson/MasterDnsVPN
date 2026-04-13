@@ -20,23 +20,23 @@ type preparedTunnelDomain struct {
 	qname      []byte
 }
 
-func buildTunnelQuestionBytesPrepared(tunnelQType string, domain preparedTunnelDomain, encoded []byte) ([]byte, error) {
+func QueryTypeFromQueryTypeStr(tunnelQType string) uint16 {
 	qType := uint16(0)
 	if tunnelQType == "AAAA" {
 		qType = Enums.DNS_RECORD_TYPE_AAAA
 	} else {
 		qType = Enums.DNS_RECORD_TYPE_TXT
 	}
+	return qType
+}
+
+func buildTunnelQuestionBytesPrepared(tunnelQType string, domain preparedTunnelDomain, encoded []byte) ([]byte, error) {
+	qType := QueryTypeFromQueryTypeStr(tunnelQType)
 	return DnsParser.BuildTunnelQuestionPacketPrepared(domain.normalized, domain.qname, encoded, qType, EDnsSafeUDPSize)
 }
 
 func buildTunnelQuestionBytes(tunnelQType string, domain string, encoded []byte) ([]byte, error) {
-	qType := uint16(0)
-	if tunnelQType == "AAAA" {
-		qType = Enums.DNS_RECORD_TYPE_AAAA
-	} else {
-		qType = Enums.DNS_RECORD_TYPE_TXT
-	}
+	qType := QueryTypeFromQueryTypeStr(tunnelQType)
 	return DnsParser.BuildTunnelQuestionPacket(domain, encoded, qType, EDnsSafeUDPSize)
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"masterdnsvpn-go/internal/logger"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,6 +79,8 @@ func pickOne(label string, items []string) (int, error) {
 }
 
 func RunStartupPicker() (Selection, error) {
+	logger.ShouldUseColor() // hack to trigger change of console mode on Windows to enable colors.
+
 	baseDir, err := executableDir()
 	if err != nil {
 		return Selection{}, err

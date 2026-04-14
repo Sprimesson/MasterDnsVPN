@@ -1,0 +1,14 @@
+# ---------------------------------------------------------------------------
+# Tagging target  (converted from: autotag)
+# ---------------------------------------------------------------------------
+
+.PHONY: autotag
+
+autotag:
+	@NAME="$$(date +%y%m%d)-Spr-$(SERVER_EXEC_VER)"
+	COMMIT="$$(git rev-parse HEAD)"
+	git tag    -f "$$NAME" "$$COMMIT"
+	echo "Tag    $$NAME -> $$COMMIT"
+	git branch -f "$$NAME" "$$COMMIT"
+	echo "Branch $$NAME -> $$COMMIT"
+	git push -f origin "refs/tags/$$NAME" "refs/heads/$$NAME"

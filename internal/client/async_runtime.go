@@ -11,6 +11,7 @@ package client
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -29,6 +30,7 @@ type asyncReadPacket struct {
 	data      []byte
 	addr      *net.UDPAddr
 	localAddr string
+	txnId     uint16
 }
 
 func (c *Client) runtimePacketDuplicationCount(packetType uint8) int {
@@ -790,7 +792,11 @@ func (c *Client) asyncWriterWorker(ctx context.Context, id int, conn *net.UDPCon
 				if frame.addr == nil || len(frame.packet) == 0 {
 					continue
 				}
+				txnId := binary.BigEndian.Uint16(frame.packet[0:2])
 				if _, err := conn.WriteToUDP(frame.packet, frame.addr); err == nil {
+					if c.extLogDispatch {
+						c.log.Debugf("--------- Request out %d ---------", txnId)
+					}
 					c.balancer.TrackResolverSend(
 						frame.packet,
 						frame.addr.String(),
@@ -845,10 +851,12 @@ func (c *Client) asyncReaderWorker(ctx context.Context, id int, conn *net.UDPCon
 				continue
 			}
 
+			txnId := binary.BigEndian.Uint16(buf[0:2])
+
 			packetData := buf[:n]
 
 			select {
-			case c.rxChannel <- asyncReadPacket{data: packetData, addr: addr, localAddr: localAddr}:
+			case c.rxChannel <- asyncReadPacket{data: packetData, addr: addr, localAddr: localAddr, txnId: txnId}:
 			default:
 				// Queue full! Drop packet and RECYCLE buffer.
 				c.udpBufferPool.Put(buf)
@@ -867,6 +875,9 @@ func (c *Client) asyncProcessorWorker(ctx context.Context, id int) {
 		case <-ctx.Done():
 			return
 		case pkt := <-c.rxChannel:
+			if c.extLogDispatch {
+				c.log.Debugf("--- Response in %d ---", pkt.txnId)
+			}
 			c.handleInboundPacket(pkt.data, pkt.addr, pkt.localAddr)
 
 			// RECYCLE buffer back to the pool.

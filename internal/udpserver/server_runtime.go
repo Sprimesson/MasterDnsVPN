@@ -223,6 +223,9 @@ func (s *Server) dnsWorker(ctx context.Context, conn *net.UDPConn, reqCh <-chan 
 				if req.conn != nil {
 					writeConn = req.conn
 				}
+				if s.extLogDispatch {
+					s.log.Debugf("--- Response out ---")
+				}
 				if _, err := writeConn.WriteToUDP(response, req.addr); err != nil {
 					s.log.Debugf(
 						"\U0001F4A5 <yellow>UDP Write Error, Worker: <cyan>%d</cyan>, Remote: <cyan>%v</cyan>, Error: <cyan>%v</cyan></yellow>",

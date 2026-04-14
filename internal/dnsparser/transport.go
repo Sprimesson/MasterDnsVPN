@@ -796,6 +796,10 @@ func encodedQNameLen(encodedChars int, domainLen int) int {
 var dnsIDCounter atomic.Uint32
 var dnsIDInit sync.Once
 
+/*func nextDNSRequestID() uint16 {
+	return uint16(mathrand.Int())
+}*/
+
 func nextDNSRequestID() uint16 {
 	dnsIDInit.Do(func() {
 		var seed [4]byte

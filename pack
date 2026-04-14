@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 
 cd "$(dirname "$0")"
-./deploy_cli_linux || exit 1
-./deploy_cli_winmac || exit 1
+./prep_cli_linux || exit 1
+./prep_cli_winmac || exit 1
 
 source ./ver
 
 cd $DEST_DIR
 
-COMMON_FILES=(*resolvers*.txt client_config_*.toml)
+shopt -s nocaseglob
+
+COMMON_FILES=(*resolvers*.txt *client_config*.toml)
 
 build_zip() {
   local name="$1"
@@ -17,13 +19,13 @@ build_zip() {
   zip -r "$name" "$@" "${COMMON_FILES[@]}"
 }
 
-build_zip "MasterDnsVPN_Client_Linux_${DEPLOY_VER}" \
-          "MasterDnsVPN_Client_Linux_${DEPLOY_VER}"
+build_zip "MasterDnsVPN_Client_Linux_${SERVER_EXEC_VER}" \
+          "MasterDnsVPN_Client_Linux_${SERVER_EXEC_VER}"
 
-build_zip "MasterDnsVPN_Client_Win64_${DEPLOY_VER}" \
-          "MasterDnsVPN_Client_Win64_${DEPLOY_VER}.exe"
+build_zip "MasterDnsVPN_Client_Win64_${SERVER_EXEC_VER}" \
+          "MasterDnsVPN_Client_Win64_${SERVER_EXEC_VER}.exe"
 
-build_zip "MasterDnsVPN_Client_Darwin_${DEPLOY_VER}" \
-          "MasterDnsVPN_Client_Darwin_${DEPLOY_VER}"
+build_zip "MasterDnsVPN_Client_Darwin_${SERVER_EXEC_VER}" \
+          "MasterDnsVPN_Client_Darwin_${SERVER_EXEC_VER}"
 
 echo Success

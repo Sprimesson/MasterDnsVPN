@@ -29,3 +29,5 @@ build/
 /mdvserver*
 client_config_sample.toml
 /logs
+.resolver_report.txt
+.ips.txt

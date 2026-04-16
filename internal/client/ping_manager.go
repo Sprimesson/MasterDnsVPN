@@ -70,7 +70,7 @@ func (p *PingManager) NotifyPacket(packetType uint8, isInbound bool) {
 	}
 
 	isPing := packetType == Enums.PACKET_PING
-	isPong := isInbound // packetType == Enums.PACKET_PONG
+	isPong := packetType == Enums.PACKET_PONG
 
 	now := time.Now().UnixNano()
 

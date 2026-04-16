@@ -335,7 +335,7 @@ func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn
 	}
 
 	windowSize := max(cfg.WindowSize, 300)
-	receiveWindowSize := min(max(windowSize, windowSize*2), 32)
+	receiveWindowSize := max(max(windowSize, windowSize*2), 32)
 
 	limit := max(int(float64(windowSize)*0.8), 50)
 
@@ -369,7 +369,7 @@ func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn
 		terminalAckWait:      time.Duration(maxF(30.0, cfg.TerminalAckWaitTimeout) * float64(time.Second)),
 
 		enableControlReliability: cfg.EnableControlReliability,
-		controlMaxRetries:        maxI(30, cfg.ControlMaxRetries),
+		controlMaxRetries:        maxI(5, cfg.ControlMaxRetries),
 		controlPacketTTL:         time.Duration(maxF(120.0, cfg.ControlPacketTTL) * float64(time.Second)),
 		dataNackMaxGap:           maxI(0, cfg.DataNackMaxGap),
 		dataNackInitialDelay:     time.Duration(maxF(0.0, cfg.DataNackInitialDelaySeconds) * float64(time.Second)),
